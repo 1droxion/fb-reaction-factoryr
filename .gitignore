@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.env
+*.swp
+*.zip
+__pycache__/
+fb-reaction-factory/reactions/
+fb-reaction-factory/sources/
+fb-reaction-factory/output/
+fb-reaction-factory/demo/
+fb-reaction-factory/data/*.json
