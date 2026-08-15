@@ -6,12 +6,13 @@ from pathlib import Path
 
 from metadata import generate_metadata
 from prepare_reel import write_package
-from reaction_factory import make_reel
+from reaction_factory import ffprobe_duration, make_reel
 
 ROOT = Path(__file__).resolve().parent
 INBOX = ROOT / "sources" / "approved_inbox"
 STATE = ROOT / "data" / "auto_watch_state.json"
 SUPPORTED = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
+MIN_SOURCE_SECONDS = 60.0
 
 INBOX.mkdir(parents=True, exist_ok=True)
 STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -61,8 +62,18 @@ def process_once(reaction="auto"):
         if not stable_file(source):
             continue
 
+        duration = ffprobe_duration(source)
+        if duration < MIN_SOURCE_SECONDS:
+            print(
+                f"SKIPPED: {source.name} is {duration:.1f}s. "
+                f"Main/source videos must be at least {MIN_SOURCE_SECONDS:.0f}s."
+            )
+            processed[key] = stamp
+            save_state(state)
+            continue
+
         caption = caption_for(source)
-        print(f"Preparing: {source.name}")
+        print(f"Preparing: {source.name} ({duration:.1f}s source -> 60s Reel)")
         video, reaction_used = make_reel(
             str(source),
             caption=caption,
@@ -73,7 +84,12 @@ def process_once(reaction="auto"):
         text_path, json_path, post_text = write_package(
             Path(video),
             metadata,
-            {"reaction_used": reaction_used, "source_inbox_file": str(source)},
+            {
+                "reaction_used": reaction_used,
+                "source_inbox_file": str(source),
+                "source_duration_seconds": duration,
+                "target_reel_seconds": 60,
+            },
         )
         processed[key] = stamp
         save_state(state)
@@ -90,7 +106,10 @@ def process_once(reaction="auto"):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Watch sources/approved_inbox and auto-prepare reaction Reels. Only place clips here after confirming reuse rights/permission."
+        description=(
+            "Watch sources/approved_inbox and auto-prepare 60-second reaction Reels. "
+            "Only place clips here after confirming reuse rights/permission."
+        )
     )
     ap.add_argument("--reaction", default="auto")
     ap.add_argument("--loop", action="store_true")
@@ -98,6 +117,7 @@ def main():
     args = ap.parse_args()
 
     print(f"Approved inbox: {INBOX}")
+    print(f"Minimum main/source length: {MIN_SOURCE_SECONDS:.0f} seconds")
     print("Only put clips here that you own or have permission/license to reuse.")
 
     if args.loop:
