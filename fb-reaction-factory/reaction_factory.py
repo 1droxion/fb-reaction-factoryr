@@ -114,10 +114,12 @@ def choose_reaction(caption="", preferred="auto"):
 def compose(source, reaction, output, max_seconds=60):
     source = Path(source)
     reaction = Path(reaction)
-    duration = min(max_seconds, ffprobe_duration(source))
-    if duration < 4:
+    source_duration = ffprobe_duration(source)
+    if source_duration < 4:
         raise RuntimeError("Source must be at least 4 seconds for a Reel.")
+    duration = float(max_seconds)
 
+    # Both inputs loop when shorter than the target so every output is a full 60s Reel.
     # 1080x1920: top 30% reaction (576px), bottom 70% source (1344px).
     filter_complex = (
         "[0:v]scale=1080:576:force_original_aspect_ratio=increase,"
@@ -130,7 +132,7 @@ def compose(source, reaction, output, max_seconds=60):
     cmd = [
         "ffmpeg", "-y",
         "-stream_loop", "-1", "-i", str(reaction),
-        "-i", str(source),
+        "-stream_loop", "-1", "-i", str(source),
         "-t", f"{duration:.3f}",
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a?",
@@ -159,7 +161,6 @@ def make_reel(source, caption="", reaction="auto", rights_ok=False):
     return out, reaction_item
 
 
-
 def next_publish_slot():
     tz_name = os.getenv("TIMEZONE", "America/Chicago")
     tz = ZoneInfo(tz_name)
@@ -185,6 +186,7 @@ def next_publish_slot():
             if candidate > now and candidate_iso not in reserved:
                 return candidate_iso
     raise RuntimeError("No open posting slot found in the next 14 days.")
+
 
 def queue_job(source, caption="", reaction="auto", rights_ok=False, publish_at=None):
     if not rights_ok:
