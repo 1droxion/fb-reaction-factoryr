@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parent
 INBOX = ROOT / "sources" / "approved_inbox"
 STATE = ROOT / "data" / "auto_watch_state.json"
 SUPPORTED = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm"}
-MIN_SOURCE_SECONDS = 60.0
+MIN_SOURCE_SECONDS = 4.0
+TARGET_REEL_SECONDS = 60
 
 INBOX.mkdir(parents=True, exist_ok=True)
 STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -66,14 +67,19 @@ def process_once(reaction="auto"):
         if duration < MIN_SOURCE_SECONDS:
             print(
                 f"SKIPPED: {source.name} is {duration:.1f}s. "
-                f"Main/source videos must be at least {MIN_SOURCE_SECONDS:.0f}s."
+                f"Source videos must be at least {MIN_SOURCE_SECONDS:.0f}s."
             )
-            processed[key] = stamp
-            save_state(state)
             continue
 
         caption = caption_for(source)
-        print(f"Preparing: {source.name} ({duration:.1f}s source -> 60s Reel)")
+        if duration < TARGET_REEL_SECONDS:
+            print(
+                f"Preparing: {source.name} ({duration:.1f}s source -> "
+                f"looped to {TARGET_REEL_SECONDS}s Reel)"
+            )
+        else:
+            print(f"Preparing: {source.name} ({duration:.1f}s source -> {TARGET_REEL_SECONDS}s Reel)")
+
         video, reaction_used = make_reel(
             str(source),
             caption=caption,
@@ -88,7 +94,8 @@ def process_once(reaction="auto"):
                 "reaction_used": reaction_used,
                 "source_inbox_file": str(source),
                 "source_duration_seconds": duration,
-                "target_reel_seconds": 60,
+                "target_reel_seconds": TARGET_REEL_SECONDS,
+                "source_looped": duration < TARGET_REEL_SECONDS,
             },
         )
         processed[key] = stamp
@@ -108,6 +115,7 @@ def main():
     ap = argparse.ArgumentParser(
         description=(
             "Watch sources/approved_inbox and auto-prepare 60-second reaction Reels. "
+            "Approved source clips from 4 to 59.9 seconds are looped to fill 60 seconds. "
             "Only place clips here after confirming reuse rights/permission."
         )
     )
@@ -117,7 +125,8 @@ def main():
     args = ap.parse_args()
 
     print(f"Approved inbox: {INBOX}")
-    print(f"Minimum main/source length: {MIN_SOURCE_SECONDS:.0f} seconds")
+    print(f"Minimum source length: {MIN_SOURCE_SECONDS:.0f} seconds")
+    print(f"Target Reel length: {TARGET_REEL_SECONDS} seconds")
     print("Only put clips here that you own or have permission/license to reuse.")
 
     if args.loop:
