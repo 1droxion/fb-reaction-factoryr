@@ -16,6 +16,7 @@ EXPECTED_IG_USERNAME = "dhruv6x8"
 MANAGED_KEYS = {
     "META_GRAPH_VERSION",
     "META_PAGE_ID",
+    "META_USER_ACCESS_TOKEN",
     "META_PAGE_ACCESS_TOKEN",
     "META_IG_USER_ID",
     "META_IG_USERNAME",
@@ -117,6 +118,7 @@ def main():
     values = {
         "META_GRAPH_VERSION": GRAPH_VERSION,
         "META_PAGE_ID": PAGE_ID,
+        "META_USER_ACCESS_TOKEN": user_token,
         "META_PAGE_ACCESS_TOKEN": page_token,
         "META_IG_USER_ID": ig_id,
         "META_IG_USERNAME": ig_username or EXPECTED_IG_USERNAME,
@@ -129,7 +131,7 @@ def main():
     if ig_id != EXPECTED_IG_ID:
         print("Warning: Instagram ID differs from the account previously seen in Business Suite.")
     print(f"Saved securely to: {ENV_FILE}")
-    print("No access token was printed.")
+    print("User token + Page token were saved securely. No access token was printed.")
 
 
 if __name__ == "__main__":
