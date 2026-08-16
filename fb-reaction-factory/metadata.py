@@ -5,13 +5,25 @@ import requests
 
 
 def fallback_metadata(caption: str):
-    base = (caption or "Wait for the ending").strip()
-    base = re.sub(r"\s+", " ", base)[:70]
-    title = base if base else "Wait for the ending 😂"
+    raw = (caption or "").strip()
+    raw = re.sub(r"\s+", " ", raw)
+
+    # Uploaded files often have random UUID/hash names. Never expose those as a Reel title.
+    compact = re.sub(r"[^A-Za-z0-9]", "", raw)
+    looks_random = bool(
+        re.fullmatch(r"[0-9a-fA-F]{16,}", compact)
+        or re.fullmatch(r"[A-Za-z0-9]{24,}", compact)
+    )
+
+    if not raw or looks_random or raw.lower() in {"funny reaction", "reaction"}:
+        title = "Wait for the ending 😂"
+    else:
+        title = raw[:70]
+
     return {
         "title": title,
-        "description": f"{title}\n\nFollow for more daily reaction videos.",
-        "hashtags": ["#funny", "#reaction", "#reels", "#viral", "#comedy"],
+        "description": "This reaction gets better at the end 😂 Follow for more daily funny reactions.",
+        "hashtags": ["#FunnyVideos", "#ReactionVideo", "#ComedyReels", "#WaitForIt", "#FunnyReels"],
     }
 
 
@@ -21,10 +33,10 @@ def generate_metadata(caption: str):
         return fallback_metadata(caption)
 
     model = os.getenv("OPENAI_MODEL", "gpt-5")
-    prompt = f"""Create Facebook Reel metadata for a reaction video.
+    prompt = f"""Create Facebook Reel metadata for a funny reaction video aimed at a US audience.
 Source context: {caption or 'funny short-form clip'}
 Return ONLY JSON with keys title, description, hashtags.
-Rules: catchy but not misleading; title under 80 characters; description 1-2 short sentences; 4-6 relevant hashtags; do not claim ownership of the source clip."""
+Rules: catchy but not misleading; title under 70 characters; description one short sentence plus a light follow CTA; 5 relevant hashtags; never repeat the title inside the description; never use raw filenames, UUIDs, hashes, or file IDs as title text; do not claim ownership of the source clip."""
     r = requests.post(
         "https://api.openai.com/v1/responses",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
