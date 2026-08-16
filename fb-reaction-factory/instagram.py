@@ -7,10 +7,13 @@ import requests
 
 def _config():
     ig_user_id = os.getenv("META_IG_USER_ID", "").strip()
-    token = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+    token = (
+        os.getenv("META_USER_ACCESS_TOKEN", "").strip()
+        or os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+    )
     version = os.getenv("META_GRAPH_VERSION", "v26.0").strip()
     if not ig_user_id or not token:
-        raise RuntimeError("Set META_IG_USER_ID and META_PAGE_ACCESS_TOKEN first.")
+        raise RuntimeError("Set META_IG_USER_ID and META_USER_ACCESS_TOKEN first.")
     return ig_user_id, token, version
 
 
@@ -23,9 +26,13 @@ def _json(response):
         error = data.get("error", {})
         message = error.get("message") or f"HTTP {response.status_code}"
         code = error.get("code")
+        subcode = error.get("error_subcode")
         detail = f"Instagram API error: {message}"
         if code is not None:
-            detail += f" (code {code})"
+            detail += f" (code {code}"
+            if subcode is not None:
+                detail += f", subcode {subcode}"
+            detail += ")"
         raise RuntimeError(detail)
     return data
 
@@ -90,7 +97,6 @@ def publish_reel(video_path, caption, timeout_seconds=300):
                 "Authorization": f"OAuth {token}",
                 "offset": "0",
                 "file_size": str(size),
-                "Content-Type": "application/octet-stream",
             },
             data=video_file,
             timeout=900,
