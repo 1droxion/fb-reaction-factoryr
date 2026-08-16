@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "output"
 ENV_FILE = ROOT / ".env"
+CLEAN_CAPTION = (
+    "Wait for the ending 😂\n\n"
+    "This reaction gets better at the end 😂 Follow for more daily funny reactions.\n\n"
+    "#FunnyVideos #ReactionVideo #ComedyReels #WaitForIt #FunnyReels"
+)
 
 
 def load_env_file(path: Path):
@@ -26,13 +32,31 @@ def latest_reel():
     return reels[0]
 
 
+def dirty_caption(text: str):
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    if not lines:
+        return True
+    first = lines[0]
+    compact = re.sub(r"[^A-Za-z0-9]", "", first)
+    if re.fullmatch(r"[0-9a-fA-F]{16,}", compact):
+        return True
+    if first.lower().startswith(("approved_", "approved ", "auto_", "reel_")):
+        return True
+    if len(lines) > 1 and lines[0] == lines[1] and len(compact) >= 12:
+        return True
+    return False
+
+
 def caption_for(video: Path):
     text_path = video.with_name(video.stem + "_facebook.txt")
     if text_path.exists():
         text = text_path.read_text(encoding="utf-8").strip()
-        if text:
+        if text and not dirty_caption(text):
             return text, text_path
-    return "Wait for the ending 😂\n\n#FunnyVideos #ReactionVideo #ComedyReels #WaitForIt #FunnyReels", None
+        print("Old/random caption detected. Replacing it with a clean caption.")
+        text_path.write_text(CLEAN_CAPTION + "\n", encoding="utf-8")
+        return CLEAN_CAPTION, text_path
+    return CLEAN_CAPTION, None
 
 
 def main():
