@@ -5,6 +5,7 @@ import mimetypes
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -23,7 +24,9 @@ STATE_FILES = (
     "autopilot_state.json",
     "auto_pipeline_state.json",
 )
-MAX_CLOUD_BYTES = 40 * 1024 * 1024
+# Keep uploads small so the Edge Function never has to proxy a large video body.
+MAX_CLOUD_BYTES = 6 * 1024 * 1024
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 DATA.mkdir(parents=True, exist_ok=True)
 REACTIONS.mkdir(parents=True, exist_ok=True)
@@ -75,12 +78,17 @@ def compact_reaction(path: Path) -> Path:
         return path
 
     target = CACHE / path.name
-    print(f"Compressing oversized reaction clip for cloud: {path.name}")
+    if target.exists() and 0 < target.stat().st_size <= MAX_CLOUD_BYTES:
+        print(f"Using cached small cloud copy: {path.name}")
+        return target
+
+    print(f"Compressing reaction clip for reliable cloud upload: {path.name}")
     cmd = [
         ffmpeg_path(), "-y", "-i", str(path),
-        "-vf", "scale='min(960,iw)':-2",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
-        "-c:a", "aac", "-b:a", "96k",
+        "-vf", "scale='min(720,iw)':-2,fps=24",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "29",
+        "-maxrate", "900k", "-bufsize", "1800k",
+        "-c:a", "aac", "-b:a", "64k",
         "-movflags", "+faststart",
         str(target),
     ]
@@ -89,7 +97,7 @@ def compact_reaction(path: Path) -> Path:
         raise RuntimeError(f"Compression failed for {path.name}")
     if target.stat().st_size > MAX_CLOUD_BYTES:
         raise RuntimeError(
-            f"Compressed reaction clip is still too large ({target.stat().st_size / 1024 / 1024:.1f} MB): {path.name}"
+            f"Cloud copy is still too large ({target.stat().st_size / 1024 / 1024:.1f} MB): {path.name}"
         )
     print(f"Cloud copy ready: {target.stat().st_size / 1024 / 1024:.1f} MB")
     return target
@@ -97,16 +105,28 @@ def compact_reaction(path: Path) -> Path:
 
 def upload_file(local_path: Path, remote_path: str):
     content_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
-    with local_path.open("rb") as f:
-        r = requests.post(
-            cloud_url("upload", path=remote_path),
-            headers=headers(content_type),
-            data=f,
-            timeout=180,
-        )
-    if not r.ok:
-        raise RuntimeError(f"Cloud upload failed for {remote_path}: {r.status_code} {r.text[:300]}")
-    print(f"Uploaded: {remote_path}")
+    last_detail = "unknown error"
+    for attempt in range(1, 4):
+        try:
+            with local_path.open("rb") as f:
+                r = requests.post(
+                    cloud_url("upload", path=remote_path),
+                    headers=headers(content_type),
+                    data=f,
+                    timeout=180,
+                )
+            if r.ok:
+                print(f"Uploaded: {remote_path}")
+                return
+            last_detail = f"{r.status_code} {r.text[:300]}"
+            if r.status_code not in RETRYABLE_STATUS:
+                break
+        except requests.RequestException as exc:
+            last_detail = str(exc)
+        if attempt < 3:
+            print(f"Upload retry {attempt}/2 for {remote_path}...")
+            time.sleep(attempt * 3)
+    raise RuntimeError(f"Cloud upload failed for {remote_path}: {last_detail}")
 
 
 def download_file(remote_path: str, local_path: Path, required=False):
@@ -132,10 +152,19 @@ def push_reactions():
     files = sorted(REACTIONS.glob("*.mp4"))
     if not files:
         raise RuntimeError("No reaction MP4 files found in reactions/.")
+
+    remote = set(list_remote("reactions"))
+    uploaded = 0
+    skipped = 0
     for path in files:
+        if path.name in remote:
+            print(f"Already in cloud, skipping: reactions/{path.name}")
+            skipped += 1
+            continue
         cloud_copy = compact_reaction(path)
         upload_file(cloud_copy, f"reactions/{path.name}")
-    print(f"Reaction clips synced: {len(files)}")
+        uploaded += 1
+    print(f"Reaction clips synced: {len(files)} total ({uploaded} uploaded, {skipped} already present)")
 
 
 def pull_reactions():
