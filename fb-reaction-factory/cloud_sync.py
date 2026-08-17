@@ -3,6 +3,8 @@ import argparse
 import json
 import mimetypes
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
@@ -11,6 +13,7 @@ import requests
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 REACTIONS = ROOT / "reactions"
+CACHE = DATA / "cloud_upload_cache"
 CLOUD_URL = "https://zlnhaqzawbzagraxhmlb.supabase.co/functions/v1/reaction-factory-cloud"
 STATE_FILES = (
     "source_feeds.txt",
@@ -20,9 +23,11 @@ STATE_FILES = (
     "autopilot_state.json",
     "auto_pipeline_state.json",
 )
+MAX_CLOUD_BYTES = 40 * 1024 * 1024
 
 DATA.mkdir(parents=True, exist_ok=True)
 REACTIONS.mkdir(parents=True, exist_ok=True)
+CACHE.mkdir(parents=True, exist_ok=True)
 
 
 def load_env():
@@ -56,6 +61,38 @@ def headers(content_type=None):
 def cloud_url(op, **params):
     query = "&".join(f"{quote(str(k))}={quote(str(v))}" for k, v in params.items())
     return f"{CLOUD_URL}?op={quote(op)}" + (f"&{query}" if query else "")
+
+
+def ffmpeg_path():
+    exe = shutil.which("ffmpeg")
+    if not exe:
+        raise RuntimeError("ffmpeg is required for cloud compression.")
+    return exe
+
+
+def compact_reaction(path: Path) -> Path:
+    if path.stat().st_size <= MAX_CLOUD_BYTES:
+        return path
+
+    target = CACHE / path.name
+    print(f"Compressing oversized reaction clip for cloud: {path.name}")
+    cmd = [
+        ffmpeg_path(), "-y", "-i", str(path),
+        "-vf", "scale='min(960,iw)':-2",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
+        "-c:a", "aac", "-b:a", "96k",
+        "-movflags", "+faststart",
+        str(target),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not target.exists() or target.stat().st_size <= 0:
+        raise RuntimeError(f"Compression failed for {path.name}")
+    if target.stat().st_size > MAX_CLOUD_BYTES:
+        raise RuntimeError(
+            f"Compressed reaction clip is still too large ({target.stat().st_size / 1024 / 1024:.1f} MB): {path.name}"
+        )
+    print(f"Cloud copy ready: {target.stat().st_size / 1024 / 1024:.1f} MB")
+    return target
 
 
 def upload_file(local_path: Path, remote_path: str):
@@ -96,7 +133,8 @@ def push_reactions():
     if not files:
         raise RuntimeError("No reaction MP4 files found in reactions/.")
     for path in files:
-        upload_file(path, f"reactions/{path.name}")
+        cloud_copy = compact_reaction(path)
+        upload_file(cloud_copy, f"reactions/{path.name}")
     print(f"Reaction clips synced: {len(files)}")
 
 
