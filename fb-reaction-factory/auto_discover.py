@@ -1,36 +1,37 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import time
-import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
-SOURCES = ROOT / "sources"
-INBOX = SOURCES / "approved_inbox"
 FEEDS_FILE = DATA / "source_feeds.txt"
+URLS_FILE = DATA / "approved_urls.txt"
 STATE_FILE = DATA / "discovery_state.json"
-MIN_SECONDS = 60.0
+MIN_SECONDS = 4.0
 KEYWORDS = (
     "funny", "comedy", "fail", "fails", "prank", "lol", "laugh",
     "unexpected", "crazy", "funniest", "try not to laugh", "viral",
-    "dog", "cat", "baby", "reaction", "oops"
+    "dog", "cat", "baby", "reaction", "oops", "meme", "memes"
 )
 
-for folder in (DATA, SOURCES, INBOX):
-    folder.mkdir(parents=True, exist_ok=True)
+DATA.mkdir(parents=True, exist_ok=True)
 
 
 def load_state():
     if not STATE_FILE.exists():
-        return {"seen": []}
+        return {"seen": [], "last_selected": None}
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data.setdefault("seen", [])
+        return data
     except Exception:
-        return {"seen": []}
+        return {"seen": [], "last_selected": None}
 
 
 def save_state(state):
@@ -40,8 +41,9 @@ def save_state(state):
 def feeds():
     if not FEEDS_FILE.exists():
         FEEDS_FILE.write_text(
-            "# Put one source/feed/account/collection URL per line.\n"
-            "# Adding a source here means you approve the system to use it.\n",
+            "# Put one approved source account/feed/collection URL per line.\n"
+            "# Only list sources whose videos you own or have permission/license to reuse.\n"
+            "# AutoPilot discovers only from these approved sources.\n",
             encoding="utf-8",
         )
         return []
@@ -53,10 +55,32 @@ def feeds():
     return out
 
 
+def ensure_queue_file():
+    if not URLS_FILE.exists():
+        URLS_FILE.write_text(
+            "# AutoPilot queue. One approved source URL per line.\n",
+            encoding="utf-8",
+        )
+
+
+def canonical_url(url):
+    url = (url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return url
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if "instagram.com" in host:
+        match = re.search(r"/(reel|reels|p)/([^/?#]+)", parsed.path, re.I)
+        if match:
+            kind = "reel" if match.group(1).lower() in ("reel", "reels") else "p"
+            return f"https://www.instagram.com/{kind}/{match.group(2)}/"
+    return url
+
+
 def ytdlp():
     exe = shutil.which("yt-dlp")
     if not exe:
-        raise RuntimeError("yt-dlp is not installed. Run: python3 -m pip install yt-dlp")
+        raise RuntimeError("yt-dlp is not installed. Run: python3 -m pip install -r requirements.txt")
     return exe
 
 
@@ -67,15 +91,23 @@ def run_json(args):
     return json.loads(p.stdout)
 
 
+def is_direct_post(url):
+    return bool(re.search(r"instagram\.com/(?:reel|reels|p)/[^/?#]+", url, re.I))
+
+
 def normalize_url(item):
     for key in ("webpage_url", "original_url", "url"):
         value = item.get(key)
         if isinstance(value, str) and value.startswith(("http://", "https://")):
-            return value
+            return canonical_url(value)
     return None
 
 
 def collect_entries(feed_url, max_items=20):
+    # A direct Reel/Post URL can itself be an approved source entry.
+    if is_direct_post(feed_url):
+        return [{"webpage_url": canonical_url(feed_url)}]
+
     data = run_json([
         ytdlp(),
         "--flat-playlist",
@@ -99,20 +131,30 @@ def full_info(url):
     ])
 
 
+def safe_int(value):
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
 def score(info):
     text = " ".join(str(info.get(k) or "") for k in ("title", "description", "tags")).lower()
     points = sum(2 for word in KEYWORDS if word in text)
-    duration = float(info.get("duration") or 0)
-    if 60 <= duration <= 95:
+    try:
+        duration = float(info.get("duration") or 0)
+    except Exception:
+        duration = 0
+    if 4 <= duration <= 90:
         points += 5
-    elif duration >= 60:
+    elif duration > 90:
         points += 2
-    view_count = int(info.get("view_count") or 0)
-    if view_count >= 1000000:
+    views = safe_int(info.get("view_count"))
+    if views >= 1000000:
         points += 4
-    elif view_count >= 100000:
+    elif views >= 100000:
         points += 2
-    elif view_count >= 10000:
+    elif views >= 10000:
         points += 1
     return points
 
@@ -123,7 +165,7 @@ def discover_candidates(max_items=20):
     candidates = []
 
     for feed in feeds():
-        print(f"Scanning source: {feed}")
+        print(f"Scanning approved source: {feed}")
         try:
             items = collect_entries(feed, max_items=max_items)
         except Exception as exc:
@@ -137,10 +179,25 @@ def discover_candidates(max_items=20):
             try:
                 info = full_info(url)
             except Exception as exc:
+                # A direct approved Reel can still be queued even if yt-dlp cannot
+                # read metadata; the main downloader will try its public-page fallback.
+                if is_direct_post(url):
+                    candidates.append({
+                        "url": url,
+                        "title": "approved Instagram Reel",
+                        "duration": 0.0,
+                        "score": 1,
+                        "view_count": 0,
+                    })
+                    continue
                 print(f"SKIP candidate metadata: {url} ({exc})")
                 continue
-            duration = float(info.get("duration") or 0)
-            if duration < MIN_SECONDS:
+
+            try:
+                duration = float(info.get("duration") or 0)
+            except Exception:
+                duration = 0.0
+            if 0 < duration < MIN_SECONDS:
                 seen.add(url)
                 continue
             candidates.append({
@@ -148,7 +205,7 @@ def discover_candidates(max_items=20):
                 "title": info.get("title") or "",
                 "duration": duration,
                 "score": score(info),
-                "view_count": info.get("view_count") or 0,
+                "view_count": safe_int(info.get("view_count")),
             })
 
     state["seen"] = sorted(seen)
@@ -157,53 +214,59 @@ def discover_candidates(max_items=20):
     return candidates
 
 
-def download_candidate(candidate):
-    token = uuid.uuid4().hex[:10]
-    template = str(INBOX / f"auto_{token}.%(ext)s")
-    cmd = [
-        ytdlp(), "--no-playlist",
-        "-f", "bv*+ba/b",
-        "--merge-output-format", "mp4",
-        "-o", template,
-        candidate["url"],
+def queue_candidate(candidate):
+    ensure_queue_file()
+    url = canonical_url(candidate["url"])
+    existing = [
+        canonical_url(line.strip())
+        for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
     ]
-    print(f"SELECTED: {candidate['title']}")
-    print(f"URL: {candidate['url']}")
-    print(f"Duration: {candidate['duration']:.1f}s | Score: {candidate['score']}")
-    subprocess.run(cmd, check=True)
+    if url not in existing:
+        with URLS_FILE.open("a", encoding="utf-8") as f:
+            if URLS_FILE.stat().st_size and not URLS_FILE.read_text(encoding="utf-8").endswith("\n"):
+                f.write("\n")
+            f.write(url + "\n")
 
     state = load_state()
     seen = set(state.get("seen", []))
-    seen.add(candidate["url"])
+    seen.add(url)
     state["seen"] = sorted(seen)
     state["last_selected"] = candidate
     save_state(state)
 
+    print(f"AUTO-DISCOVERED: {candidate.get('title') or 'source video'}")
+    print(f"QUEUED URL: {url}")
+    return url
 
-def run_once(max_items=20):
+
+def discover_and_queue_one(max_items=20):
     source_list = feeds()
     if not source_list:
-        print(f"No sources configured. Add account/feed URLs to: {FEEDS_FILE}")
-        return False
+        print(f"No approved discovery sources. Add account/feed URLs to: {FEEDS_FILE}")
+        return None
     candidates = discover_candidates(max_items=max_items)
     if not candidates:
-        print("No new 60+ second candidates found.")
-        return False
-    download_candidate(candidates[0])
-    print(f"Downloaded into: {INBOX}")
-    print("The auto watcher can now edit it automatically.")
-    return True
+        print("No new eligible candidates found in approved sources.")
+        return None
+    return queue_candidate(candidates[0])
+
+
+def run_once(max_items=20):
+    url = discover_and_queue_one(max_items=max_items)
+    return bool(url)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Automatically discover and select 60+ second source videos from approved source feeds.")
+    ap = argparse.ArgumentParser(description="Discover new videos from approved source feeds and add them to the AutoPilot queue.")
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=int, default=900, help="Seconds between discovery scans")
     ap.add_argument("--max-items", type=int, default=20)
     args = ap.parse_args()
 
-    print(f"Source list: {FEEDS_FILE}")
-    print(f"Target: videos at least {MIN_SECONDS:.0f} seconds")
+    print(f"Approved source list: {FEEDS_FILE}")
+    print(f"Queue: {URLS_FILE}")
+    print(f"Minimum source duration: {MIN_SECONDS:.0f} seconds")
     if args.loop:
         while True:
             try:
