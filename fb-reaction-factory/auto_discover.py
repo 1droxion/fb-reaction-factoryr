@@ -23,6 +23,14 @@ KEYWORDS = (
     "unexpected", "crazy", "funniest", "try not to laugh", "viral",
     "dog", "cat", "baby", "reaction", "oops", "meme", "memes"
 )
+FACTORY_CAPTION_MARKERS = (
+    "follow for more daily reaction videos",
+    "follow for more daily funny reactions",
+    "this reaction gets better at the end",
+    "#reactionvideo",
+    "#comedyreels",
+    "#waitforit",
+)
 
 DATA.mkdir(parents=True, exist_ok=True)
 
@@ -135,6 +143,13 @@ def normalize_url(item):
     return None
 
 
+def is_factory_caption(caption):
+    text = re.sub(r"\s+", " ", str(caption or "")).strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in FACTORY_CAPTION_MARKERS)
+
+
 def meta_error(response):
     try:
         data = response.json()
@@ -188,7 +203,8 @@ def meta_instagram_media(username, max_items=20):
         raise RuntimeError("META_IG_USER_ID is missing. Run python3 meta_connect.py first.")
 
     fields = "id,caption,media_type,media_url,permalink,timestamp"
-    if own_username and username.lower() == own_username.lower():
+    is_own_profile = bool(own_username and username.lower() == own_username.lower())
+    if is_own_profile:
         data = meta_get(
             f"{ig_id}/media",
             {"fields": fields, "limit": max_items},
@@ -204,6 +220,7 @@ def meta_instagram_media(username, max_items=20):
         media = ((data.get("business_discovery") or {}).get("media") or {}).get("data") or []
 
     candidates = []
+    skipped_factory = 0
     for item in media:
         if not isinstance(item, dict):
             continue
@@ -215,6 +232,9 @@ def meta_instagram_media(username, max_items=20):
         if not media_url:
             continue
         caption = str(item.get("caption") or "")
+        if is_own_profile and is_factory_caption(caption):
+            skipped_factory += 1
+            continue
         points = sum(2 for word in KEYWORDS if word in caption.lower())
         candidates.append({
             "url": media_url,
@@ -228,6 +248,8 @@ def meta_instagram_media(username, max_items=20):
             "source_account": username,
             "discovery_method": "meta_api",
         })
+    if skipped_factory:
+        print(f"Self-loop protection: ignored {skipped_factory} Reaction Factory post(s) on @{username}.")
     return candidates
 
 
