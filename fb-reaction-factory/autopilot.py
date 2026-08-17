@@ -4,11 +4,11 @@ import fcntl
 import json
 import os
 import signal
-import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from auto_discover import discover_and_queue_one
 from auto_pipeline import approved_urls, load_env_file, process_url
 
 ROOT = Path(__file__).resolve().parent
@@ -76,7 +76,6 @@ def next_url(state):
     for url in approved_urls():
         if processed.get(url) == "success":
             continue
-        # Invalid source URLs can be skipped after a hard failure. Token/auth errors are never added here.
         if failed.get(url, {}).get("skip"):
             continue
         return url
@@ -123,21 +122,40 @@ def print_status(state):
     waiting = max(0, len(urls) - done - skipped)
     print("\nREACTION FACTORY AUTOPILOT STATUS")
     print(f"Queue: {len(urls)} total · {waiting} waiting · {done} posted · {skipped} skipped")
+    print("Discovery: approved sources only (data/source_feeds.txt)")
     print(f"Last success: {state.get('last_success') or 'none'}")
     print(f"Next run: {state.get('next_run') or 'as soon as a URL is available'}")
     if state.get("last_error"):
         print(f"Last error: {state['last_error']}")
 
 
+def find_or_discover_url(state):
+    url = next_url(state)
+    if url:
+        return url
+
+    print("Queue empty. Scanning approved discovery sources...")
+    try:
+        discovered = discover_and_queue_one(max_items=20)
+    except Exception as exc:
+        print(f"Discovery error: {exc}")
+        return None
+
+    if not discovered:
+        return None
+
+    # Re-read state/queue after discovery and use the newly queued URL.
+    return next_url(state) or discovered
+
+
 def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
-    # Reload every cycle so a fresh token written by meta_connect.py is picked up without restarting AutoPilot.
     load_env_file()
     state = load_state()
-    url = next_url(state)
+    url = find_or_discover_url(state)
     if not url:
         state["last_error"] = None
         save_state(state)
-        print("No waiting URLs. AutoPilot is watching data/approved_urls.txt...")
+        print("No waiting URLs and no new approved-source candidates. AutoPilot will scan again...")
         return "idle"
 
     state["last_url"] = url
@@ -169,7 +187,6 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
             print(f"AutoPilot will retry this same URL after {TOKEN_RETRY_MINUTES} minutes.")
             return "token_error"
 
-        # Hard source/edit errors are skipped so one bad URL cannot block the entire queue forever.
         state.setdefault("failed", {})[url] = {
             "error": str(exc),
             "at": now_iso(),
@@ -198,8 +215,9 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
 def loop(interval_hours, publish_instagram=True, publish_facebook=True):
     lock = acquire_lock()
     print("Reaction Factory AutoPilot is ON")
-    print(f"Cadence: one queued URL every {interval_hours:g} hours")
+    print(f"Cadence: one Reel every {interval_hours:g} hours")
     print("Queue file: data/approved_urls.txt")
+    print("Approved discovery sources: data/source_feeds.txt")
     print("Press Ctrl+C to stop AutoPilot.")
 
     try:
@@ -220,13 +238,10 @@ def loop(interval_hours, publish_instagram=True, publish_facebook=True):
             if status == "idle":
                 time.sleep(IDLE_POLL_SECONDS)
             elif status == "failed":
-                # Immediately move on to the next queued URL after a hard source failure.
                 time.sleep(2)
             elif status == "token_error":
-                # next_run is already set to a short retry window.
                 time.sleep(2)
             else:
-                # successful run stores the 5-hour next_run; loop will wait on the next iteration.
                 time.sleep(2)
     finally:
         try:
@@ -245,11 +260,11 @@ def main():
     signal.signal(signal.SIGINT, handle_stop)
     signal.signal(signal.SIGTERM, handle_stop)
 
-    ap = argparse.ArgumentParser(description="Reaction Factory queued publishing autopilot")
+    ap = argparse.ArgumentParser(description="Reaction Factory approved-source discovery + publishing autopilot")
     ap.add_argument("--interval-hours", type=float, default=DEFAULT_INTERVAL_HOURS)
     ap.add_argument("--instagram-only", action="store_true", help="Publish to Instagram only")
     ap.add_argument("--facebook-only", action="store_true", help="Publish to TVMind USA Page only")
-    ap.add_argument("--once", action="store_true", help="Process at most one queued URL and exit")
+    ap.add_argument("--once", action="store_true", help="Process/discover at most one source and exit")
     ap.add_argument("--status", action="store_true", help="Show queue/autopilot status and exit")
     args = ap.parse_args()
 
