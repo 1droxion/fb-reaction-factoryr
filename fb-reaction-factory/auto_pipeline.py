@@ -13,6 +13,7 @@ import requests
 
 from facebook import publish_reel as publish_facebook
 from instagram import publish_reel as publish_instagram
+from instagram_download import download_instagram_reel, is_instagram_url
 from metadata import generate_metadata
 from prepare_reel import write_package
 from reaction_factory import ffprobe_duration, make_reel
@@ -62,7 +63,7 @@ def ensure_url_file():
     if not URLS_FILE.exists():
         URLS_FILE.write_text(
             "# Put one approved source video URL per line.\n"
-            "# Supports public Facebook/video URLs and Google Drive shared files.\n"
+            "# Supports public Instagram/Facebook/video URLs and Google Drive shared files.\n"
             "# Only add URLs you are allowed to download and reuse.\n",
             encoding="utf-8",
         )
@@ -117,6 +118,12 @@ def direct_download(url, token):
 
 
 def download_url(url):
+    # Instagram gets its dedicated public-page fallback path, matching dashboard.py.
+    # It does not bypass private/login-only/age/region/audience restrictions.
+    if is_instagram_url(url):
+        print("Downloading approved Instagram Reel...")
+        return download_instagram_reel(url)
+
     token = uuid.uuid4().hex[:10]
     drive_url = google_drive_direct_url(url)
     if drive_url:
@@ -151,7 +158,13 @@ def download_url(url):
 def clean_caption_seed(source):
     raw = source.stem.replace("_", " ").replace("-", " ").strip()
     compact = re.sub(r"[^A-Za-z0-9]", "", raw)
-    if re.fullmatch(r"[0-9a-fA-F]{16,}", compact) or raw.lower().startswith("approved "):
+    lower = raw.lower()
+    if (
+        re.fullmatch(r"[0-9a-fA-F]{16,}", compact)
+        or lower.startswith("approved ")
+        or lower.startswith("instagram ")
+        or lower.startswith("reel ")
+    ):
         return "funny reaction"
     return raw or "funny reaction"
 
