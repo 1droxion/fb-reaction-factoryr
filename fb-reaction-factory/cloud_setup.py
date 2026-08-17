@@ -19,15 +19,42 @@ def require(command):
     return path
 
 
+def user_gh_env():
+    # Codespaces injects a limited integration GITHUB_TOKEN. It cannot manage
+    # repository Actions secrets. Remove injected token variables so `gh` uses
+    # the user's normal browser-authenticated GitHub CLI credential instead.
+    env = os.environ.copy()
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("GH_TOKEN", None)
+    return env
+
+
+def ensure_user_gh_auth():
+    gh = require("gh")
+    proc = subprocess.run(
+        [gh, "auth", "status", "--hostname", "github.com"],
+        env=user_gh_env(),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "GitHub user login is required once. Run: "
+            "env -u GITHUB_TOKEN -u GH_TOKEN gh auth login --hostname github.com --web"
+        )
+
+
 def set_secret(name, value):
     if not value:
         return False
+    ensure_user_gh_auth()
     gh = require("gh")
     proc = subprocess.run(
         [gh, "secret", "set", name, "--repo", REPO],
         input=value,
         text=True,
         capture_output=True,
+        env=user_gh_env(),
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "GitHub secret command failed").strip()
@@ -37,11 +64,13 @@ def set_secret(name, value):
 
 
 def trigger_test_run():
+    ensure_user_gh_auth()
     gh = require("gh")
     proc = subprocess.run(
         [gh, "workflow", "run", WORKFLOW, "--repo", REPO],
         capture_output=True,
         text=True,
+        env=user_gh_env(),
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "Could not start workflow").strip()
