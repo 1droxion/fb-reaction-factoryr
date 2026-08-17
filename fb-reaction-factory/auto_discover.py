@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -8,11 +9,14 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+import requests
+
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 FEEDS_FILE = DATA / "source_feeds.txt"
 URLS_FILE = DATA / "approved_urls.txt"
 STATE_FILE = DATA / "discovery_state.json"
+ENV_FILE = ROOT / ".env"
 MIN_SECONDS = 4.0
 KEYWORDS = (
     "funny", "comedy", "fail", "fails", "prank", "lol", "laugh",
@@ -21,6 +25,17 @@ KEYWORDS = (
 )
 
 DATA.mkdir(parents=True, exist_ok=True)
+
+
+def load_env_file():
+    if not ENV_FILE.exists():
+        return
+    for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ[key.strip()] = value.strip()
 
 
 def load_state():
@@ -77,6 +92,23 @@ def canonical_url(url):
     return url
 
 
+def instagram_profile_username(url):
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        return None
+    host = parsed.netloc.lower()
+    if host not in ("instagram.com", "www.instagram.com"):
+        return None
+    parts = [x for x in parsed.path.split("/") if x]
+    if len(parts) != 1:
+        return None
+    username = parts[0].strip()
+    if not username or username.lower() in ("reel", "reels", "p", "explore"):
+        return None
+    return username
+
+
 def ytdlp():
     exe = shutil.which("yt-dlp")
     if not exe:
@@ -103,8 +135,103 @@ def normalize_url(item):
     return None
 
 
+def meta_error(response):
+    try:
+        data = response.json()
+    except Exception:
+        return f"HTTP {response.status_code}: {response.text[:300]}"
+    error = data.get("error") or {}
+    msg = error.get("message") or f"HTTP {response.status_code}"
+    code = error.get("code")
+    subcode = error.get("error_subcode")
+    if code is not None:
+        msg += f" (code {code}"
+        if subcode is not None:
+            msg += f", subcode {subcode}"
+        msg += ")"
+    return msg
+
+
+def meta_get(path, params):
+    load_env_file()
+    version = os.getenv("META_GRAPH_VERSION", "v26.0").strip() or "v26.0"
+    tokens = []
+    for key in ("META_USER_ACCESS_TOKEN", "META_PAGE_ACCESS_TOKEN"):
+        token = os.getenv(key, "").strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    if not tokens:
+        raise RuntimeError("Missing Meta token. Run python3 meta_connect.py first.")
+
+    last_error = None
+    for token in tokens:
+        call_params = dict(params)
+        call_params["access_token"] = token
+        response = requests.get(
+            f"https://graph.facebook.com/{version}/{path}",
+            params=call_params,
+            timeout=60,
+        )
+        if response.ok:
+            data = response.json()
+            if "error" not in data:
+                return data
+        last_error = meta_error(response)
+    raise RuntimeError(f"Meta discovery error: {last_error or 'unknown Meta error'}")
+
+
+def meta_instagram_media(username, max_items=20):
+    load_env_file()
+    ig_id = os.getenv("META_IG_USER_ID", "").strip()
+    own_username = os.getenv("META_IG_USERNAME", "").strip()
+    if not ig_id:
+        raise RuntimeError("META_IG_USER_ID is missing. Run python3 meta_connect.py first.")
+
+    fields = "id,caption,media_type,media_url,permalink,timestamp"
+    if own_username and username.lower() == own_username.lower():
+        data = meta_get(
+            f"{ig_id}/media",
+            {"fields": fields, "limit": max_items},
+        )
+        media = data.get("data") or []
+    else:
+        expanded = (
+            f"business_discovery.username({username})"
+            "{username,media.limit(" + str(max_items) + "){"
+            + fields + "}}"
+        )
+        data = meta_get(ig_id, {"fields": expanded})
+        media = ((data.get("business_discovery") or {}).get("media") or {}).get("data") or []
+
+    candidates = []
+    for item in media:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("media_type") or "").upper() != "VIDEO":
+            continue
+        media_url = str(item.get("media_url") or "").strip()
+        permalink = canonical_url(str(item.get("permalink") or "").strip())
+        media_id = str(item.get("id") or "").strip()
+        if not media_url:
+            continue
+        caption = str(item.get("caption") or "")
+        points = sum(2 for word in KEYWORDS if word in caption.lower())
+        candidates.append({
+            "url": media_url,
+            "permalink": permalink,
+            "seen_key": media_id or permalink or media_url,
+            "title": caption[:120] or f"Instagram video from @{username}",
+            "duration": 0.0,
+            "score": points + 3,
+            "view_count": 0,
+            "timestamp": str(item.get("timestamp") or ""),
+            "source_account": username,
+            "discovery_method": "meta_api",
+        })
+    return candidates
+
+
 def collect_entries(feed_url, max_items=20):
-    # A direct Reel/Post URL can itself be an approved source entry.
     if is_direct_post(feed_url):
         return [{"webpage_url": canonical_url(feed_url)}]
 
@@ -165,6 +292,21 @@ def discover_candidates(max_items=20):
     candidates = []
 
     for feed in feeds():
+        username = instagram_profile_username(feed)
+        if username:
+            print(f"Scanning approved Instagram profile with Meta API: @{username}")
+            try:
+                items = meta_instagram_media(username, max_items=max_items)
+            except Exception as exc:
+                print(f"SKIP Instagram source: {exc}")
+                continue
+            for candidate in items:
+                key = candidate.get("seen_key") or candidate.get("permalink") or candidate.get("url")
+                if not key or key in seen:
+                    continue
+                candidates.append(candidate)
+            continue
+
         print(f"Scanning approved source: {feed}")
         try:
             items = collect_entries(feed, max_items=max_items)
@@ -179,11 +321,10 @@ def discover_candidates(max_items=20):
             try:
                 info = full_info(url)
             except Exception as exc:
-                # A direct approved Reel can still be queued even if yt-dlp cannot
-                # read metadata; the main downloader will try its public-page fallback.
                 if is_direct_post(url):
                     candidates.append({
                         "url": url,
+                        "seen_key": url,
                         "title": "approved Instagram Reel",
                         "duration": 0.0,
                         "score": 1,
@@ -202,41 +343,50 @@ def discover_candidates(max_items=20):
                 continue
             candidates.append({
                 "url": url,
+                "seen_key": url,
                 "title": info.get("title") or "",
                 "duration": duration,
                 "score": score(info),
                 "view_count": safe_int(info.get("view_count")),
+                "timestamp": str(info.get("timestamp") or info.get("upload_date") or ""),
             })
 
     state["seen"] = sorted(seen)
     save_state(state)
-    candidates.sort(key=lambda x: (x["score"], x["view_count"]), reverse=True)
+    candidates.sort(
+        key=lambda x: (x.get("score", 0), x.get("view_count", 0), x.get("timestamp", "")),
+        reverse=True,
+    )
     return candidates
 
 
 def queue_candidate(candidate):
     ensure_queue_file()
-    url = canonical_url(candidate["url"])
+    url = str(candidate["url"]).strip()
     existing = [
-        canonical_url(line.strip())
+        line.strip()
         for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     if url not in existing:
+        current = URLS_FILE.read_text(encoding="utf-8")
         with URLS_FILE.open("a", encoding="utf-8") as f:
-            if URLS_FILE.stat().st_size and not URLS_FILE.read_text(encoding="utf-8").endswith("\n"):
+            if current and not current.endswith("\n"):
                 f.write("\n")
             f.write(url + "\n")
 
     state = load_state()
     seen = set(state.get("seen", []))
-    seen.add(url)
+    key = candidate.get("seen_key") or candidate.get("permalink") or url
+    seen.add(key)
     state["seen"] = sorted(seen)
     state["last_selected"] = candidate
     save_state(state)
 
+    label = candidate.get("permalink") or url
     print(f"AUTO-DISCOVERED: {candidate.get('title') or 'source video'}")
-    print(f"QUEUED URL: {url}")
+    print(f"SOURCE: {label}")
+    print("Queued a direct video URL for immediate processing.")
     return url
 
 
