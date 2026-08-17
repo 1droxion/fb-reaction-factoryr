@@ -40,7 +40,9 @@ def load_env_file():
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+        # Always overwrite the current process environment so a freshly
+        # refreshed token from meta_connect.py is picked up without restart.
+        os.environ[key.strip()] = value.strip()
 
 
 def load_state():
