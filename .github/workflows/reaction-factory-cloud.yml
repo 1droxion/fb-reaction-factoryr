@@ -1,0 +1,44 @@
+name: Reaction Factory Cloud
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+concurrency:
+  group: reaction-factory-cloud
+  cancel-in-progress: false
+
+jobs:
+  autopilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: fb-reaction-factory
+    env:
+      META_PAGE_ID: '1213992321791402'
+      META_IG_USER_ID: '17841406232043396'
+      META_IG_USERNAME: 'dhruv6x8'
+      META_GRAPH_VERSION: 'v26.0'
+      META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+      META_USER_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Run cloud autopilot job
+        run: python cloud_job.py
