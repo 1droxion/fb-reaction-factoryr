@@ -18,13 +18,14 @@ def publish_reel(video_path, description, state="PUBLISHED"):
     if not video_path.exists():
         raise FileNotFoundError(video_path)
 
-    start_url = f"https://graph.facebook.com/{version}/{page_id}/video_reels"
+    # Meta's official Reels Publishing flow uses /me/video_reels with a Page Access Token.
+    start_url = f"https://graph.facebook.com/{version}/me/video_reels"
     start = requests.post(start_url, data={"upload_phase": "start", "access_token": token}, timeout=60)
     start.raise_for_status()
     start_data = start.json()
     video_id = start_data["video_id"]
 
-    upload_url = f"https://rupload.facebook.com/video-upload/{version}/{video_id}"
+    upload_url = start_data.get("upload_url") or f"https://rupload.facebook.com/video-upload/{version}/{video_id}"
     size = video_path.stat().st_size
     with video_path.open("rb") as f:
         up = requests.post(
