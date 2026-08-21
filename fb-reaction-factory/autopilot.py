@@ -15,9 +15,10 @@ ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 STATE_FILE = DATA / "autopilot_state.json"
 LOCK_FILE = DATA / "autopilot.lock"
-DEFAULT_INTERVAL_HOURS = 5.0
+DEFAULT_INTERVAL_HOURS = 3.0
 TOKEN_RETRY_MINUTES = 5
 IDLE_POLL_SECONDS = 60
+HISTORY_LIMIT = 100
 
 DATA.mkdir(parents=True, exist_ok=True)
 STOP = False
@@ -36,38 +37,57 @@ def parse_dt(value):
         return None
 
 
+def blank_state(last_error=None):
+    return {
+        "processed": {},
+        "failed": {},
+        "history": [],
+        "last_success": None,
+        "last_error": last_error,
+        "next_run": None,
+        "last_url": None,
+        "last_results": None,
+    }
+
+
 def load_state():
     if not STATE_FILE.exists():
-        return {
-            "processed": {},
-            "failed": {},
-            "last_success": None,
-            "last_error": None,
-            "next_run": None,
-            "last_url": None,
-            "last_results": None,
-        }
+        return blank_state()
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         data.setdefault("processed", {})
         data.setdefault("failed", {})
+        data.setdefault("history", [])
         return data
     except Exception:
-        return {
-            "processed": {},
-            "failed": {},
-            "last_success": None,
-            "last_error": "State file could not be read; starting with a clean state.",
-            "next_run": None,
-            "last_url": None,
-            "last_results": None,
-        }
+        return blank_state("State file could not be read; starting with a clean state.")
 
 
 def save_state(state):
     tmp = STATE_FILE.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
     tmp.replace(STATE_FILE)
+
+
+def add_history(state, status, url=None, *, error=None, results=None):
+    item = {
+        "at": now_iso(),
+        "status": status,
+        "url": url,
+    }
+    if error:
+        item["error"] = str(error)
+    if isinstance(results, dict):
+        instagram = results.get("instagram") or {}
+        if isinstance(instagram, dict):
+            item["instagram_media_id"] = instagram.get("media_id")
+            item["instagram_permalink"] = instagram.get("permalink")
+        video = results.get("video")
+        if video:
+            item["video"] = str(video)
+    history = state.setdefault("history", [])
+    history.insert(0, item)
+    del history[HISTORY_LIMIT:]
 
 
 def next_url(state):
@@ -144,7 +164,6 @@ def find_or_discover_url(state):
     if not discovered:
         return None
 
-    # Re-read state/queue after discovery and use the newly queued URL.
     return next_url(state) or discovered
 
 
@@ -154,8 +173,11 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
     url = find_or_discover_url(state)
     if not url:
         state["last_error"] = None
+        next_run = datetime.now().astimezone() + timedelta(hours=interval_hours)
+        state["next_run"] = next_run.isoformat(timespec="seconds")
         save_state(state)
-        print("No waiting URLs and no new approved-source candidates. AutoPilot will scan again...")
+        print("No waiting URLs and no new approved-source candidates.")
+        print(f"Next scan window: {state['next_run']}")
         return "idle"
 
     state["last_url"] = url
@@ -181,6 +203,7 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
         if looks_like_token_error(exc):
             retry_at = datetime.now().astimezone() + timedelta(minutes=TOKEN_RETRY_MINUTES)
             state["next_run"] = retry_at.isoformat(timespec="seconds")
+            add_history(state, "token_error", url, error=exc)
             save_state(state)
             print("\nMETA TOKEN NEEDS REFRESH")
             print("Run: python3 meta_connect.py")
@@ -193,6 +216,7 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
             "skip": True,
         }
         state["next_run"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        add_history(state, "failed", url, error=exc)
         save_state(state)
         print(f"\nSKIPPING FAILED URL: {exc}")
         return "failed"
@@ -205,6 +229,7 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
     state["last_results"] = results
     next_run = datetime.now().astimezone() + timedelta(hours=interval_hours)
     state["next_run"] = next_run.isoformat(timespec="seconds")
+    add_history(state, "success", url, results=results)
     save_state(state)
 
     print("\nAUTOPILOT POST SUCCESS")
@@ -237,9 +262,7 @@ def loop(interval_hours, publish_instagram=True, publish_facebook=True):
             )
             if status == "idle":
                 time.sleep(IDLE_POLL_SECONDS)
-            elif status == "failed":
-                time.sleep(2)
-            elif status == "token_error":
+            elif status in {"failed", "token_error"}:
                 time.sleep(2)
             else:
                 time.sleep(2)
