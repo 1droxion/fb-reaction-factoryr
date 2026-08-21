@@ -66,6 +66,9 @@ def write_github_env(values):
     with open(GITHUB_ENV, "a", encoding="utf-8") as handle:
         for key, value in values.items():
             if value:
+                # Prevent dynamically-derived Meta credentials from being echoed
+                # by later GitHub Actions step environment summaries.
+                print(f"::add-mask::{value}")
                 handle.write(f"{key}={value}\n")
 
 
