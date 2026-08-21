@@ -7,13 +7,16 @@ import requests
 
 def _config():
     ig_user_id = os.getenv("META_IG_USER_ID", "").strip()
+    # Prefer the Page access token for Instagram publishing. A normal user token
+    # may expire sooner; the Page token is the correct server-side credential
+    # when available for the connected Facebook Page / Instagram account.
     token = (
-        os.getenv("META_USER_ACCESS_TOKEN", "").strip()
-        or os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+        os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+        or os.getenv("META_USER_ACCESS_TOKEN", "").strip()
     )
     version = os.getenv("META_GRAPH_VERSION", "v26.0").strip()
     if not ig_user_id or not token:
-        raise RuntimeError("Set META_IG_USER_ID and META_USER_ACCESS_TOKEN first.")
+        raise RuntimeError("Set META_IG_USER_ID and a Meta Page/User access token first.")
     return ig_user_id, token, version
 
 
