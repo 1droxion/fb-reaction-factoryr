@@ -22,7 +22,7 @@ jobs:
       META_IG_USERNAME: 'dhruv6x8'
       META_GRAPH_VERSION: 'v26.0'
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
-      META_USER_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+      META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
     steps:
@@ -39,6 +39,9 @@ jobs:
 
       - name: Install Python requirements
         run: python -m pip install -r requirements.txt
+
+      - name: Validate and refresh Meta credentials
+        run: python meta_preflight.py
 
       - name: Run cloud autopilot job
         run: python cloud_job.py
