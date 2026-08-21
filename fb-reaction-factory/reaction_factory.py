@@ -117,22 +117,28 @@ def compose(source, reaction, output, max_seconds=60):
     source_duration = ffprobe_duration(source)
     if source_duration < 4:
         raise RuntimeError("Source must be at least 4 seconds for a Reel.")
-    duration = float(max_seconds)
 
-    # Both inputs loop when shorter than the target so every output is a full 60s Reel.
+    # Keep the funny/source video's natural duration, capped at 60 seconds.
+    # One reaction clip is used once. If it is shorter than the source, freeze its
+    # final frame instead of looping/repeating another reaction.
+    duration = min(float(max_seconds), source_duration)
+
     # 1080x1920: top 30% reaction (576px), bottom 70% source (1344px).
     filter_complex = (
-        "[0:v]scale=1080:576:force_original_aspect_ratio=increase,"
-        "crop=1080:576,setsar=1,fps=30[reaction];"
-        "[1:v]scale=1080:1344:force_original_aspect_ratio=increase,"
-        "crop=1080:1344,setsar=1,fps=30[source];"
+        f"[0:v]scale=1080:576:force_original_aspect_ratio=increase,"
+        f"crop=1080:576,setsar=1,fps=30,"
+        f"tpad=stop_mode=clone:stop_duration={duration:.3f},"
+        f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[reaction];"
+        f"[1:v]scale=1080:1344:force_original_aspect_ratio=increase,"
+        f"crop=1080:1344,setsar=1,fps=30,"
+        f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[source];"
         "[reaction][source]vstack=inputs=2[v]"
     )
 
     cmd = [
         "ffmpeg", "-y",
-        "-stream_loop", "-1", "-i", str(reaction),
-        "-stream_loop", "-1", "-i", str(source),
+        "-i", str(reaction),
+        "-i", str(source),
         "-t", f"{duration:.3f}",
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a?",
@@ -215,7 +221,7 @@ def list_jobs():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Facebook Reaction Reel Factory")
+    ap = argparse.ArgumentParser(description="Instagram Reaction Reel Factory")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("add-reaction")
@@ -230,7 +236,7 @@ def main():
     p.add_argument("--rights-ok", action="store_true", required=True)
 
     p = sub.add_parser("queue")
-    p.add_argument("--source", required=True)
+    p.add_argument("--source", required=True, help="Approved/licensed local video path or URL")
     p.add_argument("--caption", default="")
     p.add_argument("--reaction", default="auto")
     p.add_argument("--rights-ok", action="store_true", required=True)
