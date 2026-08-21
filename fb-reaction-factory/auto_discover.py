@@ -23,14 +23,6 @@ KEYWORDS = (
     "unexpected", "crazy", "funniest", "try not to laugh", "viral",
     "dog", "cat", "baby", "reaction", "oops", "meme", "memes"
 )
-FACTORY_CAPTION_MARKERS = (
-    "follow for more daily reaction videos",
-    "follow for more daily funny reactions",
-    "this reaction gets better at the end",
-    "#reactionvideo",
-    "#comedyreels",
-    "#waitforit",
-)
 
 DATA.mkdir(parents=True, exist_ok=True)
 
@@ -61,29 +53,54 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
+def instagram_profile_username(url):
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        return None
+    if parsed.netloc.lower() not in ("instagram.com", "www.instagram.com"):
+        return None
+    parts = [x for x in parsed.path.split("/") if x]
+    if len(parts) != 1:
+        return None
+    username = parts[0].strip()
+    if username.lower() in ("reel", "reels", "p", "explore"):
+        return None
+    return username or None
+
+
+def own_instagram_username():
+    load_env_file()
+    return os.getenv("META_IG_USERNAME", "").strip().lstrip("@").lower()
+
+
 def feeds():
     if not FEEDS_FILE.exists():
         FEEDS_FILE.write_text(
             "# Put one approved source account/feed/collection URL per line.\n"
             "# Only list sources whose videos you own or have permission/license to reuse.\n"
-            "# AutoPilot discovers only from these approved sources.\n",
+            "# Your own Instagram profile is automatically excluded.\n",
             encoding="utf-8",
         )
         return []
+
+    own = own_instagram_username()
     out = []
-    for line in FEEDS_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            out.append(line)
+    for raw in FEEDS_FILE.read_text(encoding="utf-8").splitlines():
+        feed = raw.strip()
+        if not feed or feed.startswith("#"):
+            continue
+        username = instagram_profile_username(feed)
+        if username and own and username.lower() == own:
+            print(f"SKIP own Instagram profile: @{username}")
+            continue
+        out.append(feed)
     return out
 
 
 def ensure_queue_file():
     if not URLS_FILE.exists():
-        URLS_FILE.write_text(
-            "# AutoPilot queue. One approved source URL per line.\n",
-            encoding="utf-8",
-        )
+        URLS_FILE.write_text("# AutoPilot queue. One approved source URL per line.\n", encoding="utf-8")
 
 
 def canonical_url(url):
@@ -91,8 +108,7 @@ def canonical_url(url):
     if not url.startswith(("http://", "https://")):
         return url
     parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    if "instagram.com" in host:
+    if "instagram.com" in parsed.netloc.lower():
         match = re.search(r"/(reel|reels|p)/([^/?#]+)", parsed.path, re.I)
         if match:
             kind = "reel" if match.group(1).lower() in ("reel", "reels") else "p"
@@ -100,27 +116,10 @@ def canonical_url(url):
     return url
 
 
-def instagram_profile_username(url):
-    try:
-        parsed = urlparse(url.strip())
-    except Exception:
-        return None
-    host = parsed.netloc.lower()
-    if host not in ("instagram.com", "www.instagram.com"):
-        return None
-    parts = [x for x in parsed.path.split("/") if x]
-    if len(parts) != 1:
-        return None
-    username = parts[0].strip()
-    if not username or username.lower() in ("reel", "reels", "p", "explore"):
-        return None
-    return username
-
-
 def ytdlp():
     exe = shutil.which("yt-dlp")
     if not exe:
-        raise RuntimeError("yt-dlp is not installed. Run: python3 -m pip install -r requirements.txt")
+        raise RuntimeError("yt-dlp is not installed.")
     return exe
 
 
@@ -141,13 +140,6 @@ def normalize_url(item):
         if isinstance(value, str) and value.startswith(("http://", "https://")):
             return canonical_url(value)
     return None
-
-
-def is_factory_caption(caption):
-    text = re.sub(r"\s+", " ", str(caption or "")).strip().lower()
-    if not text:
-        return False
-    return any(marker in text for marker in FACTORY_CAPTION_MARKERS)
 
 
 def meta_error(response):
@@ -176,7 +168,7 @@ def meta_get(path, params):
         if token and token not in tokens:
             tokens.append(token)
     if not tokens:
-        raise RuntimeError("Missing Meta token. Run python3 meta_connect.py first.")
+        raise RuntimeError("Missing Meta token.")
 
     last_error = None
     for token in tokens:
@@ -198,49 +190,39 @@ def meta_get(path, params):
 def meta_instagram_media(username, max_items=20):
     load_env_file()
     ig_id = os.getenv("META_IG_USER_ID", "").strip()
-    own_username = os.getenv("META_IG_USERNAME", "").strip()
+    own = own_instagram_username()
+    if own and username.lower() == own:
+        print(f"SKIP own Instagram profile: @{username}")
+        return []
     if not ig_id:
-        raise RuntimeError("META_IG_USER_ID is missing. Run python3 meta_connect.py first.")
+        raise RuntimeError("META_IG_USER_ID is missing.")
 
     fields = "id,caption,media_type,media_url,permalink,timestamp"
-    is_own_profile = bool(own_username and username.lower() == own_username.lower())
-    if is_own_profile:
-        data = meta_get(
-            f"{ig_id}/media",
-            {"fields": fields, "limit": max_items},
-        )
-        media = data.get("data") or []
-    else:
-        expanded = (
-            f"business_discovery.username({username})"
-            "{username,media.limit(" + str(max_items) + "){"
-            + fields + "}}"
-        )
-        data = meta_get(ig_id, {"fields": expanded})
-        media = ((data.get("business_discovery") or {}).get("media") or {}).get("data") or []
+    expanded = (
+        f"business_discovery.username({username})"
+        "{username,media.limit(" + str(max_items) + "){" + fields + "}}"
+    )
+    data = meta_get(ig_id, {"fields": expanded})
+    media = ((data.get("business_discovery") or {}).get("media") or {}).get("data") or []
 
     candidates = []
-    skipped_factory = 0
     for item in media:
         if not isinstance(item, dict):
             continue
         if str(item.get("media_type") or "").upper() != "VIDEO":
             continue
         media_url = str(item.get("media_url") or "").strip()
-        permalink = canonical_url(str(item.get("permalink") or "").strip())
-        media_id = str(item.get("id") or "").strip()
         if not media_url:
             continue
         caption = str(item.get("caption") or "")
-        if is_own_profile and is_factory_caption(caption):
-            skipped_factory += 1
-            continue
+        permalink = canonical_url(str(item.get("permalink") or "").strip())
+        media_id = str(item.get("id") or "").strip()
         points = sum(2 for word in KEYWORDS if word in caption.lower())
         candidates.append({
             "url": media_url,
             "permalink": permalink,
             "seen_key": media_id or permalink or media_url,
-            "title": caption[:120] or f"Instagram video from @{username}",
+            "title": caption[:120] or f"Funny candidate from @{username}",
             "duration": 0.0,
             "score": points + 3,
             "view_count": 0,
@@ -248,21 +230,15 @@ def meta_instagram_media(username, max_items=20):
             "source_account": username,
             "discovery_method": "meta_api",
         })
-    if skipped_factory:
-        print(f"Self-loop protection: ignored {skipped_factory} Reaction Factory post(s) on @{username}.")
     return candidates
 
 
 def collect_entries(feed_url, max_items=20):
     if is_direct_post(feed_url):
         return [{"webpage_url": canonical_url(feed_url)}]
-
     data = run_json([
-        ytdlp(),
-        "--flat-playlist",
-        "--playlist-end", str(max_items),
-        "--dump-single-json",
-        feed_url,
+        ytdlp(), "--flat-playlist", "--playlist-end", str(max_items),
+        "--dump-single-json", feed_url,
     ])
     entries = data.get("entries")
     if isinstance(entries, list):
@@ -271,13 +247,7 @@ def collect_entries(feed_url, max_items=20):
 
 
 def full_info(url):
-    return run_json([
-        ytdlp(),
-        "--skip-download",
-        "--no-playlist",
-        "--dump-single-json",
-        url,
-    ])
+    return run_json([ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url])
 
 
 def safe_int(value):
@@ -296,8 +266,6 @@ def score(info):
         duration = 0
     if 4 <= duration <= 90:
         points += 5
-    elif duration > 90:
-        points += 2
     views = safe_int(info.get("view_count"))
     if views >= 1000000:
         points += 4
@@ -316,7 +284,7 @@ def discover_candidates(max_items=20):
     for feed in feeds():
         username = instagram_profile_username(feed)
         if username:
-            print(f"Scanning approved Instagram profile with Meta API: @{username}")
+            print(f"Scanning approved Instagram source: @{username}")
             try:
                 items = meta_instagram_media(username, max_items=max_items)
             except Exception as exc:
@@ -324,12 +292,11 @@ def discover_candidates(max_items=20):
                 continue
             for candidate in items:
                 key = candidate.get("seen_key") or candidate.get("permalink") or candidate.get("url")
-                if not key or key in seen:
-                    continue
-                candidates.append(candidate)
+                if key and key not in seen:
+                    candidates.append(candidate)
             continue
 
-        print(f"Scanning approved source: {feed}")
+        print(f"Scanning approved funny-video source: {feed}")
         try:
             items = collect_entries(feed, max_items=max_items)
         except Exception as exc:
@@ -343,19 +310,8 @@ def discover_candidates(max_items=20):
             try:
                 info = full_info(url)
             except Exception as exc:
-                if is_direct_post(url):
-                    candidates.append({
-                        "url": url,
-                        "seen_key": url,
-                        "title": "approved Instagram Reel",
-                        "duration": 0.0,
-                        "score": 1,
-                        "view_count": 0,
-                    })
-                    continue
                 print(f"SKIP candidate metadata: {url} ({exc})")
                 continue
-
             try:
                 duration = float(info.get("duration") or 0)
             except Exception:
@@ -386,8 +342,7 @@ def queue_candidate(candidate):
     ensure_queue_file()
     url = str(candidate["url"]).strip()
     existing = [
-        line.strip()
-        for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
+        line.strip() for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     if url not in existing:
@@ -405,40 +360,35 @@ def queue_candidate(candidate):
     state["last_selected"] = candidate
     save_state(state)
 
-    label = candidate.get("permalink") or url
-    print(f"AUTO-DISCOVERED: {candidate.get('title') or 'source video'}")
-    print(f"SOURCE: {label}")
-    print("Queued a direct video URL for immediate processing.")
+    print(f"AUTO-DISCOVERED: {candidate.get('title') or 'funny source video'}")
+    print(f"SOURCE: {candidate.get('permalink') or url}")
+    print("Queued approved source for immediate Instagram processing.")
     return url
 
 
 def discover_and_queue_one(max_items=20):
     source_list = feeds()
     if not source_list:
-        print(f"No approved discovery sources. Add account/feed URLs to: {FEEDS_FILE}")
+        print(f"No approved funny-video discovery sources. Add licensed/approved source feeds to: {FEEDS_FILE}")
         return None
     candidates = discover_candidates(max_items=max_items)
     if not candidates:
-        print("No new eligible candidates found in approved sources.")
+        print("No new eligible funny candidates found in approved sources.")
         return None
     return queue_candidate(candidates[0])
 
 
 def run_once(max_items=20):
-    url = discover_and_queue_one(max_items=max_items)
-    return bool(url)
+    return bool(discover_and_queue_one(max_items=max_items))
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Discover new videos from approved source feeds and add them to the AutoPilot queue.")
+    ap = argparse.ArgumentParser(description="Discover funny videos from approved sources, excluding your own Instagram profile.")
     ap.add_argument("--loop", action="store_true")
-    ap.add_argument("--interval", type=int, default=900, help="Seconds between discovery scans")
+    ap.add_argument("--interval", type=int, default=900)
     ap.add_argument("--max-items", type=int, default=20)
     args = ap.parse_args()
 
-    print(f"Approved source list: {FEEDS_FILE}")
-    print(f"Queue: {URLS_FILE}")
-    print(f"Minimum source duration: {MIN_SECONDS:.0f} seconds")
     if args.loop:
         while True:
             try:
