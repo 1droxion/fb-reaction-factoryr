@@ -118,16 +118,15 @@ def compose(source, reaction, output, max_seconds=60):
     if source_duration < 4:
         raise RuntimeError("Source must be at least 4 seconds for a Reel.")
 
-    # Keep the funny/source video's natural duration, capped at 60 seconds.
-    # One reaction clip is used once. If it is shorter than the source, freeze its
-    # final frame instead of looping/repeating another reaction.
+    # Keep the source video's natural duration, with a hard 60-second Reel cap.
+    # Loop the chosen reaction clip continuously so the reaction never freezes or
+    # disappears before the source Reel finishes.
     duration = min(float(max_seconds), source_duration)
 
     # 1080x1920: top 30% reaction (576px), bottom 70% source (1344px).
     filter_complex = (
         f"[0:v]scale=1080:576:force_original_aspect_ratio=increase,"
         f"crop=1080:576,setsar=1,fps=30,"
-        f"tpad=stop_mode=clone:stop_duration={duration:.3f},"
         f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[reaction];"
         f"[1:v]scale=1080:1344:force_original_aspect_ratio=increase,"
         f"crop=1080:1344,setsar=1,fps=30,"
@@ -137,7 +136,7 @@ def compose(source, reaction, output, max_seconds=60):
 
     cmd = [
         "ffmpeg", "-y",
-        "-i", str(reaction),
+        "-stream_loop", "-1", "-i", str(reaction),
         "-i", str(source),
         "-t", f"{duration:.3f}",
         "-filter_complex", filter_complex,
