@@ -17,10 +17,14 @@ def main():
         print(f"Not due yet. Next post window: {target.isoformat(timespec='minutes')}")
         return
 
+    status = None
     try:
-        run_cycle(5.0, publish_instagram=True, publish_facebook=True)
+        status = run_cycle(5.0, publish_instagram=True, publish_facebook=True)
     finally:
         push_state()
+
+    if status in {"failed", "token_error"}:
+        raise SystemExit(f"AutoPilot post failed with status: {status}")
 
 
 if __name__ == "__main__":
