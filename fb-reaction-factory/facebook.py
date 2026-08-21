@@ -47,9 +47,8 @@ def publish_reel(video_path, description, state="PUBLISHED"):
     if not video_path.is_file():
         raise RuntimeError(f"Not a video file: {video_path}")
 
-    # Meta Page Reels Publishing flow: start -> upload -> finish.
-    # A Page access token makes /me resolve to the Page.
-    start_url = f"https://graph.facebook.com/{version}/me/video_reels"
+    # Use the explicit Page ID. Some Page tokens do not resolve /me for this edge.
+    start_url = f"https://graph.facebook.com/{version}/{page_id}/video_reels"
     start = requests.post(
         start_url,
         params={
@@ -82,7 +81,6 @@ def publish_reel(video_path, description, state="PUBLISHED"):
         )
     _meta_json(upload, "Facebook Reel upload")
 
-    # Keep the finish request to Meta's documented Reel parameters only.
     finish = requests.post(
         start_url,
         params={
