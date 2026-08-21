@@ -10,14 +10,29 @@ PAGE_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
 USER_TOKEN = os.getenv("META_USER_ACCESS_TOKEN", "").strip()
 GITHUB_ENV = os.getenv("GITHUB_ENV", "").strip()
 
+REQUIRED_USER_PERMISSIONS = {
+    "pages_show_list",
+    "pages_read_engagement",
+    "pages_manage_posts",
+}
+CONTENT_TASKS = {
+    "CREATE_CONTENT",
+    "MANAGE",
+    "PROFILE_PLUS_CREATE_CONTENT",
+    "PROFILE_PLUS_MANAGE",
+    "PROFILE_PLUS_FULL_CONTROL",
+}
 
-def graph_get(token, fields):
+
+def graph_get_path(path, token, **params):
     if not token:
         return None, "missing token"
+    request_params = dict(params)
+    request_params["access_token"] = token
     try:
         response = requests.get(
-            f"https://graph.facebook.com/{VERSION}/{PAGE_ID}",
-            params={"fields": fields, "access_token": token},
+            f"https://graph.facebook.com/{VERSION}/{path.lstrip('/')}",
+            params=request_params,
             timeout=30,
         )
     except requests.RequestException as exc:
@@ -28,7 +43,7 @@ def graph_get(token, fields):
     except Exception:
         data = {}
 
-    if not response.ok or "error" in data:
+    if not response.ok or (isinstance(data, dict) and "error" in data):
         error = data.get("error", {}) if isinstance(data, dict) else {}
         message = str(error.get("message") or f"HTTP {response.status_code}")
         code = error.get("code")
@@ -53,40 +68,86 @@ def write_github_env(values):
                 handle.write(f"{key}={value}\n")
 
 
+def granted_user_permissions():
+    data, error = graph_get_path("me/permissions", USER_TOKEN)
+    if not data:
+        return set(), error
+    granted = {
+        str(item.get("permission") or "")
+        for item in data.get("data", [])
+        if item.get("status") == "granted"
+    }
+    return granted, None
+
+
+def find_managed_page():
+    data, error = graph_get_path(
+        "me/accounts",
+        USER_TOKEN,
+        fields="id,name,access_token,tasks,instagram_business_account{id,username}",
+        limit="100",
+    )
+    if not data:
+        return None, error
+    for page in data.get("data", []):
+        if str(page.get("id") or "") == PAGE_ID:
+            return page, None
+    return None, "configured Page was not returned by /me/accounts"
+
+
 def main():
     if not PAGE_ID:
         raise SystemExit("META_PAGE_ID is missing.")
 
-    if PAGE_TOKEN:
-        page, page_error = graph_get(PAGE_TOKEN, "id,name")
-        if page and str(page.get("id") or "") == PAGE_ID:
-            print("Meta preflight: Page access token is valid.")
-            return
-        print(f"Meta preflight: stored Page token is not usable: {page_error or 'wrong Page'}")
-    else:
-        print("Meta preflight: META_PAGE_ACCESS_TOKEN is missing.")
-
     if not USER_TOKEN:
         raise SystemExit(
-            "Meta credentials need refresh. Add a fresh GitHub Actions secret named "
-            "META_USER_ACCESS_TOKEN, then run the workflow again."
+            "META_USER_ACCESS_TOKEN is missing. Generate a fresh Meta User access token with "
+            "pages_show_list, pages_read_engagement and pages_manage_posts, then save it in "
+            "GitHub Actions as META_USER_ACCESS_TOKEN."
         )
 
-    page, user_error = graph_get(
-        USER_TOKEN,
-        "id,name,access_token,instagram_business_account{id,username}",
-    )
-    if not page or str(page.get("id") or "") != PAGE_ID:
+    granted, permission_error = granted_user_permissions()
+    if permission_error:
         raise SystemExit(
-            "Meta User token cannot access the configured Facebook Page: "
-            f"{user_error or 'wrong Page returned'}. Refresh META_USER_ACCESS_TOKEN."
+            "Could not validate META_USER_ACCESS_TOKEN permissions: " + permission_error
+        )
+
+    missing = sorted(REQUIRED_USER_PERMISSIONS - granted)
+    if missing:
+        raise SystemExit(
+            "META_USER_ACCESS_TOKEN is missing required publishing permission(s): "
+            + ", ".join(missing)
+            + ". Generate a NEW User access token granting those permissions and replace the GitHub secret."
+        )
+
+    page, page_error = find_managed_page()
+    if not page:
+        raise SystemExit(
+            "The Meta user token cannot manage the configured Facebook Page: "
+            f"{page_error}. Make sure the Facebook account has Page access/full control and then generate a new token."
+        )
+
+    tasks = {str(task) for task in (page.get("tasks") or [])}
+    if tasks and not (tasks & CONTENT_TASKS):
+        raise SystemExit(
+            "Your Facebook account can see the Page but does not have a content-publishing Page task. "
+            "Give the account Facebook Page access/full control (CREATE_CONTENT/MANAGE), then generate a new token. "
+            f"Current Page tasks: {', '.join(sorted(tasks))}"
         )
 
     refreshed_page_token = str(page.get("access_token") or "").strip()
     if not refreshed_page_token:
         raise SystemExit(
-            "Meta User token reached the Page, but Meta did not return a Page access token. "
-            "Make sure it has pages_show_list, pages_read_engagement and pages_manage_posts."
+            "Meta returned the Page but no Page access token. Re-authorize the app with "
+            "pages_show_list, pages_read_engagement and pages_manage_posts."
+        )
+
+    # Confirm the newly-derived Page token belongs to the configured Page.
+    page_check, page_check_error = graph_get_path(PAGE_ID, refreshed_page_token, fields="id,name")
+    if not page_check or str(page_check.get("id") or "") != PAGE_ID:
+        raise SystemExit(
+            "The refreshed Page token could not access the configured Page: "
+            f"{page_check_error or 'wrong Page returned'}"
         )
 
     values = {"META_PAGE_ACCESS_TOKEN": refreshed_page_token}
@@ -99,7 +160,10 @@ def main():
         values["META_IG_USERNAME"] = ig_username
 
     write_github_env(values)
-    print("Meta preflight: refreshed the runtime Page token from META_USER_ACCESS_TOKEN.")
+    print("Meta preflight: publishing permissions are valid.")
+    print("Meta preflight: refreshed runtime Page token from META_USER_ACCESS_TOKEN.")
+    if tasks:
+        print("Meta preflight: Page content task confirmed.")
 
 
 if __name__ == "__main__":
