@@ -19,7 +19,7 @@ def main():
 
     status = None
     try:
-        status = run_cycle(5.0, publish_instagram=True, publish_facebook=False)
+        status = run_cycle(3.0, publish_instagram=True, publish_facebook=False)
     finally:
         push_state()
 
