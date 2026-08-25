@@ -161,7 +161,7 @@ def find_managed_page():
 def use_user_token_fallback():
     if not USER_TOKEN:
         raise SystemExit(
-            "META_PAGE_ACCESS_TOKEN is missing and META_USER_ACCESS_TOKEN is also missing. "
+            "META_PAGE_ACCESS_TOKEN is unusable and META_USER_ACCESS_TOKEN is also missing. "
             "Save a valid Page access token in GitHub Actions as META_PAGE_ACCESS_TOKEN."
         )
 
@@ -204,7 +204,7 @@ def use_user_token_fallback():
         values["META_IG_USERNAME"] = ig_username
     write_github_env(values)
 
-    print("Meta preflight: Page token was missing, so the user-token fallback was used.")
+    print("Meta preflight: user-token fallback produced a valid runtime Page token.")
     print("Meta preflight: Instagram content publishing access is valid.")
 
 
@@ -213,9 +213,16 @@ def main():
         raise SystemExit("META_PAGE_ID is missing.")
 
     if PAGE_TOKEN:
-        use_saved_page_token()
-    else:
-        use_user_token_fallback()
+        try:
+            use_saved_page_token()
+            return
+        except SystemExit as exc:
+            if not USER_TOKEN:
+                raise
+            print(f"Meta preflight warning: saved Page token failed validation: {exc}")
+            print("Meta preflight: falling back to META_USER_ACCESS_TOKEN so automation can keep running.")
+
+    use_user_token_fallback()
 
 
 if __name__ == "__main__":
