@@ -17,12 +17,19 @@ FEEDS_FILE = DATA / "source_feeds.txt"
 URLS_FILE = DATA / "approved_urls.txt"
 STATE_FILE = DATA / "discovery_state.json"
 ENV_FILE = ROOT / ".env"
-MIN_SECONDS = 4.0
-KEYWORDS = (
-    "funny", "comedy", "fail", "fails", "prank", "lol", "laugh",
-    "unexpected", "crazy", "funniest", "try not to laugh", "viral",
-    "dog", "cat", "baby", "reaction", "oops", "meme", "memes"
+MIN_SECONDS = 35.0
+MAX_SECONDS = 60.0
+FUNNY_KEYWORDS = (
+    "funny", "comedy", "comedian", "joke", "jokes", "prank", "lol", "laugh",
+    "laughing", "funniest", "meme", "memes", "roast", "humor", "humour",
+    "fail", "fails", "reaction", "try not to laugh", "comedyreels", "funnyreels"
 )
+HINDI_KEYWORDS = (
+    "hindi", "hindicomedy", "desi", "desicomedy", "indian", "india", "indiancomedy",
+    "hindustani", "bollywood", "kapil", "sharma", "bhai", "bhaiya", "yaar", "dost",
+    "mummy", "papa", "shaadi", "biwi", "pati", "patni", "saas", "bahu", "ladka", "ladki"
+)
+DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
 
 DATA.mkdir(parents=True, exist_ok=True)
 
@@ -77,8 +84,9 @@ def own_instagram_username():
 def feeds():
     if not FEEDS_FILE.exists():
         FEEDS_FILE.write_text(
-            "# Put one approved source account/feed/collection URL per line.\n"
+            "# Put one approved Hindi comedy source account/feed URL per line.\n"
             "# Only list sources whose videos you own or have permission/license to reuse.\n"
+            "# AutoPilot only selects funny Hindi candidates and enforces 35-60 seconds.\n"
             "# Your own Instagram profile is automatically excluded.\n",
             encoding="utf-8",
         )
@@ -145,6 +153,40 @@ def normalize_url(item):
         if value.startswith("/") and "/" in value:
             return canonical_url("https://www.instagram.com" + value)
     return None
+
+
+def text_blob(info):
+    values = []
+    for key in ("title", "description", "caption", "tags"):
+        value = info.get(key)
+        if isinstance(value, (list, tuple)):
+            values.extend(str(x) for x in value)
+        elif value:
+            values.append(str(value))
+    return " ".join(values).lower()
+
+
+def looks_funny(text):
+    text = (text or "").lower()
+    return any(word in text for word in FUNNY_KEYWORDS)
+
+
+def looks_hindi(text):
+    text = text or ""
+    lowered = text.lower()
+    return bool(DEVANAGARI_RE.search(text)) or any(word in lowered for word in HINDI_KEYWORDS)
+
+
+def looks_hindi_funny(text):
+    return looks_funny(text) and looks_hindi(text)
+
+
+def duration_allowed(duration):
+    try:
+        value = float(duration or 0)
+    except Exception:
+        return False
+    return MIN_SECONDS <= value <= MAX_SECONDS
 
 
 def meta_error(response):
@@ -221,13 +263,18 @@ def meta_instagram_media(username, max_items=20):
         if not permalink and not media_url:
             continue
         caption = str(item.get("caption") or "")
+        if not looks_hindi_funny(caption):
+            continue
         media_id = str(item.get("id") or "").strip()
-        points = sum(2 for word in KEYWORDS if word in caption.lower())
+        points = sum(2 for word in FUNNY_KEYWORDS if word in caption.lower())
+        points += sum(2 for word in HINDI_KEYWORDS if word in caption.lower())
+        if DEVANAGARI_RE.search(caption):
+            points += 5
         candidates.append({
             "url": permalink or media_url,
             "permalink": permalink,
             "seen_key": media_id or permalink or media_url,
-            "title": caption[:120] or f"Funny candidate from @{username}",
+            "title": caption[:120] or f"Hindi funny candidate from @{username}",
             "duration": 0.0,
             "score": points + 3,
             "view_count": 0,
@@ -319,14 +366,17 @@ def safe_int(value):
 
 
 def score(info):
-    text = " ".join(str(info.get(k) or "") for k in ("title", "description", "tags")).lower()
-    points = sum(2 for word in KEYWORDS if word in text)
+    text = text_blob(info)
+    points = sum(2 for word in FUNNY_KEYWORDS if word in text)
+    points += sum(2 for word in HINDI_KEYWORDS if word in text)
+    if DEVANAGARI_RE.search(text):
+        points += 5
     try:
         duration = float(info.get("duration") or 0)
     except Exception:
         duration = 0
-    if 4 <= duration <= 90:
-        points += 5
+    if duration_allowed(duration):
+        points += 8
     views = safe_int(info.get("view_count"))
     if views >= 1000000:
         points += 4
@@ -347,27 +397,24 @@ def candidates_from_entries(items, seen, *, source_account=None, method="public_
         try:
             info = full_info(url)
         except Exception as exc:
-            print(f"Candidate metadata unavailable; keeping URL for processing: {url} ({exc})")
-            candidates.append({
-                "url": url,
-                "seen_key": url,
-                "title": f"Instagram candidate from @{source_account}" if source_account else "Instagram candidate",
-                "duration": 0.0,
-                "score": 1,
-                "view_count": 0,
-                "timestamp": "",
-                "source_account": source_account,
-                "discovery_method": method,
-            })
+            print(f"SKIP candidate because duration/language cannot be verified: {url} ({exc})")
             continue
 
         try:
             duration = float(info.get("duration") or 0)
         except Exception:
             duration = 0.0
-        if 0 < duration < MIN_SECONDS:
+        if not duration_allowed(duration):
             seen.add(url)
+            print(f"SKIP duration {duration:.1f}s; need 35-60s: {url}")
             continue
+
+        candidate_text = text_blob(info)
+        if not looks_hindi_funny(candidate_text):
+            seen.add(url)
+            print(f"SKIP non-Hindi/non-funny candidate: {url}")
+            continue
+
         candidates.append({
             "url": url,
             "seen_key": url,
@@ -390,7 +437,7 @@ def discover_candidates(max_items=20):
     for feed in feeds():
         username = instagram_profile_username(feed)
         if username:
-            print(f"Scanning approved Instagram source: @{username}")
+            print(f"Scanning approved Hindi comedy Instagram source: @{username}")
             try:
                 items = meta_instagram_media(username, max_items=max_items)
                 for candidate in items:
@@ -417,7 +464,7 @@ def discover_candidates(max_items=20):
                 print(f"SKIP Instagram source after fallback: {exc}")
             continue
 
-        print(f"Scanning approved funny-video source: {feed}")
+        print(f"Scanning approved Hindi funny-video source: {feed}")
         try:
             items = collect_entries(feed, max_items=max_items)
             candidates.extend(candidates_from_entries(items, seen))
@@ -455,20 +502,20 @@ def queue_candidate(candidate):
     state["last_selected"] = candidate
     save_state(state)
 
-    print(f"AUTO-DISCOVERED: {candidate.get('title') or 'funny source video'}")
+    print(f"AUTO-DISCOVERED HINDI FUNNY: {candidate.get('title') or 'approved source video'}")
     print(f"SOURCE: {candidate.get('permalink') or url}")
-    print("Queued approved source for immediate Instagram processing.")
+    print("Queued approved 35-60 second source for Instagram processing.")
     return url
 
 
 def discover_and_queue_one(max_items=20):
     source_list = feeds()
     if not source_list:
-        print(f"No approved funny-video discovery sources. Add licensed/approved source feeds to: {FEEDS_FILE}")
+        print(f"No approved Hindi comedy discovery sources. Add licensed/approved source feeds to: {FEEDS_FILE}")
         return None
     candidates = discover_candidates(max_items=max_items)
     if not candidates:
-        print("No new eligible funny candidates found in approved sources.")
+        print("No new eligible Hindi funny 35-60 second candidates found in approved sources.")
         return None
     return queue_candidate(candidates[0])
 
@@ -478,7 +525,7 @@ def run_once(max_items=20):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Discover funny videos from approved sources, excluding your own Instagram profile.")
+    ap = argparse.ArgumentParser(description="Discover Hindi funny videos 35-60 seconds from approved sources, excluding your own Instagram profile.")
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--interval", type=int, default=900)
     ap.add_argument("--max-items", type=int, default=20)
