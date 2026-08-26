@@ -25,6 +25,7 @@ SOURCES = ROOT / "sources"
 INBOX = SOURCES / "approved_inbox"
 URLS_FILE = DATA / "approved_urls.txt"
 STATE_FILE = DATA / "auto_pipeline_state.json"
+DISCOVERY_STATE_FILE = DATA / "discovery_state.json"
 ENV_FILE = ROOT / ".env"
 MIN_SECONDS = 4.0
 TARGET_SECONDS = 60
@@ -64,7 +65,7 @@ def ensure_url_file():
         URLS_FILE.write_text(
             "# Put one approved source video URL per line.\n"
             "# Supports public Instagram/Facebook/video URLs and Google Drive shared files.\n"
-            "# Only add URLs you are allowed to download and reuse.\n",
+            "# Only add URLs you own or have permission/license to download and reuse.\n",
             encoding="utf-8",
         )
 
@@ -76,6 +77,66 @@ def approved_urls():
         for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def comparable_url(url):
+    value = (url or "").strip()
+    if not value:
+        return ""
+    if "instagram.com" in value.lower():
+        return value.split("?", 1)[0].rstrip("/")
+    return value
+
+
+def require_explicit_approval(url):
+    approved = {comparable_url(item) for item in approved_urls()}
+    if comparable_url(url) not in approved:
+        raise RuntimeError(
+            "Source is not in the approved queue. Only owned, licensed, or explicitly permissioned clips may be processed."
+        )
+
+
+def source_credit_for_url(url):
+    if not DISCOVERY_STATE_FILE.exists():
+        return None
+    try:
+        state = json.loads(DISCOVERY_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    selected = state.get("last_selected") or {}
+    if not isinstance(selected, dict):
+        return None
+
+    selected_urls = {
+        comparable_url(str(selected.get("url") or "")),
+        comparable_url(str(selected.get("permalink") or "")),
+    }
+    if comparable_url(url) not in selected_urls:
+        return None
+
+    account = str(selected.get("source_account") or "").strip().lstrip("@")
+    return f"@{account}" if account else None
+
+
+def add_source_disclosure(post_text, text_path, json_path, url):
+    credit = source_credit_for_url(url)
+    disclosure = "Reaction edit from an approved source."
+    if credit:
+        disclosure += f" Source credit: {credit}."
+
+    final_text = "\n\n".join(x for x in (post_text.strip(), disclosure) if x).strip()
+    text_path.write_text(final_text + "\n", encoding="utf-8")
+
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    payload["facebook_post_text"] = final_text
+    payload["source_credit"] = credit
+    payload["source_rights_required"] = True
+    payload["reaction_edit"] = True
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return final_text
 
 
 def ytdlp():
@@ -170,6 +231,10 @@ def clean_caption_seed(source):
 
 
 def process_url(url, publish_fb=False, publish_ig=False):
+    # Safety/rights gate: process_url cannot silently turn an arbitrary public URL
+    # into a publishable Reel. It must already be in the explicit approved queue.
+    require_explicit_approval(url)
+
     source = download_url(url)
     duration = ffprobe_duration(source)
     if duration < MIN_SECONDS:
@@ -187,9 +252,11 @@ def process_url(url, publish_fb=False, publish_ig=False):
             "source_duration_seconds": duration,
             "reaction_used": reaction_used,
             "target_reel_seconds": TARGET_SECONDS,
-            "source_looped": duration < TARGET_SECONDS,
+            "source_looped": False,
+            "rights_gate": "approved_queue",
         },
     )
+    post_text = add_source_disclosure(post_text, text_path, json_path, url)
 
     print("\nREADY")
     print(f"Video: {video}")
