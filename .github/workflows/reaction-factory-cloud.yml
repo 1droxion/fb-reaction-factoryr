@@ -2,6 +2,9 @@ name: Reaction Factory Cloud
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'fb-reaction-factory/data/post_now.trigger'
   schedule:
     - cron: '*/5 * * * *'
 
@@ -24,6 +27,7 @@ jobs:
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
       META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      REACTION_FACTORY_FORCE_NOW: ${{ github.event_name == 'push' && '1' || '0' }}
 
     steps:
       - name: Checkout repository
