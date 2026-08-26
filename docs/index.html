@@ -3,79 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#090d14">
 <title>Reaction Factory</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#090d14;color:#f7f8fb;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:760px;margin:auto;padding:22px 16px 60px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center}.logo{font-weight:900;font-size:24px}.live{color:#42dd92;font-weight:800;font-size:12px}.card{background:#111722;border:1px solid #243042;border-radius:18px;padding:18px;margin-top:14px}.hero h1{margin:0;font-size:22px;line-height:1.2}.sub{color:#94a0b2;font-size:13px;line-height:1.45;margin:7px 0 16px}.row{display:flex;gap:9px}.url{flex:1;min-width:0;background:#090e16;border:1px solid #2a374a;border-radius:13px;color:#fff;padding:15px;font-size:16px;outline:none}.url:focus{border-color:#7f70ff;box-shadow:0 0 0 3px rgba(127,112,255,.12)}.btn{border:0;border-radius:13px;background:linear-gradient(135deg,#8b7cff,#5140e9);color:#fff;font-weight:900;padding:0 18px;min-height:52px;cursor:pointer}.btn:disabled{opacity:.55;cursor:not-allowed}.rights{display:flex;gap:9px;align-items:flex-start;margin-top:12px;color:#c8cfda;font-size:12px;line-height:1.4}.rights input{accent-color:#735cff;margin-top:2px;min-width:17px;min-height:17px}.msg{margin-top:12px;padding:12px;border-radius:12px;background:#0a1018;border:1px solid #202b39;color:#aab5c4;font-size:12px;line-height:1.4}.ok{color:#55e79f}.bad{color:#ff8797}.warn{color:#ffd36d}.pipeline{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}.step{min-width:0;background:#0a1018;border:1px solid #202b39;border-radius:13px;padding:11px 9px;text-align:center}.step b{display:block;font-size:18px;margin-bottom:5px}.step span{font-size:10px;color:#b8c2d0;font-weight:800}.step small{display:block;color:#6f7c8e;font-size:9px;margin-top:4px}.status{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}.stat{background:#0a1018;border:1px solid #202b39;border-radius:13px;padding:12px}.stat span{display:block;color:#8996a8;font-size:10px;text-transform:uppercase}.stat strong{display:block;margin-top:5px;font-size:17px}.history{margin-top:10px}.item{padding:12px 0;border-bottom:1px solid #1d2633}.item:last-child{border:0}.item b{font-size:12px}.item small{display:block;color:#8491a3;margin-top:4px;overflow-wrap:anywhere}.open{display:inline-block;color:#a99fff;text-decoration:none;margin-top:7px;font-size:12px;font-weight:800}.foot{color:#637084;font-size:10px;text-align:center;margin-top:18px}.chip{display:inline-block;margin-top:8px;border:1px solid #2b3748;border-radius:999px;padding:6px 9px;color:#9ca9ba;font-size:10px}.section-title{margin:0 0 12px;font-size:16px}@media(max-width:620px){.row{flex-direction:column}.btn{width:100%}.pipeline{grid-template-columns:1fr}.step{text-align:left;display:grid;grid-template-columns:28px 1fr;column-gap:8px;align-items:center}.step b{grid-row:1/3;margin:0}.step small{margin:0}.status{grid-template-columns:repeat(2,1fr)}}
-</style>
-</head>
-<body>
-<main>
-  <div class="top"><div class="logo">Reaction Factory</div><div class="live">● CLOUD ON</div></div>
-
-  <div class="card hero">
-    <h1>Paste one URL. We make the Reel.</h1>
-    <div class="sub">Paste an approved Instagram Reel or public video URL. The cloud worker downloads it, creates your 30/70 reaction edit, makes a title/caption/5 hashtags, and posts it to Instagram. Your laptop can stay off.</div>
-    <div class="row"><input id="url" class="url" inputmode="url" autocomplete="off" placeholder="https://www.instagram.com/reel/..."><button id="go" class="btn">Make & Post Reel</button></div>
-    <label class="rights"><input id="rights" type="checkbox"><span>I own this source or have permission/license to download, edit, and republish it.</span></label>
-    <div id="msg" class="msg">Ready. Paste one approved URL.</div>
-    <div class="chip">Manual URL jobs are moved to the next cloud run.</div>
-  </div>
-
-  <div class="card">
-    <h2 class="section-title">What happens automatically</h2>
-    <div class="pipeline">
-      <div class="step"><b>1</b><span>DOWNLOAD</span><small>Get source video</small></div>
-      <div class="step"><b>2</b><span>EDIT 30/70</span><small>Reaction top, source bottom</small></div>
-      <div class="step"><b>3</b><span>CAPTION</span><small>Title + description</small></div>
-      <div class="step"><b>4</b><span>5 TAGS</span><small>Relevant hashtags</small></div>
-      <div class="step"><b>5</b><span>POST</span><small>Instagram publish</small></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 class="section-title">Cloud status</h2>
-    <div class="status">
-      <div class="stat"><span>Automation</span><strong class="ok">ON</strong></div>
-      <div class="stat"><span>Normal cadence</span><strong>3 hours</strong></div>
-      <div class="stat"><span>Waiting</span><strong id="waiting">0</strong></div>
-      <div class="stat"><span>Posted</span><strong id="posted">0</strong></div>
-      <div class="stat"><span>Last success</span><strong id="last">-</strong></div>
-      <div class="stat"><span>Next run</span><strong id="next">-</strong></div>
-    </div>
-    <div id="err" class="msg">Checking cloud...</div>
-  </div>
-
-  <div class="card"><h2 class="section-title">Recent activity</h2><div id="history" class="history"><div class="sub">Loading cloud history...</div></div></div>
-  <div class="foot">Approved/licensed sources only · max 60 seconds · 1080×1920 · reaction loops until source ends</div>
-</main>
 <script>
-const CLOUD='https://zlnhaqzawbzagraxhmlb.supabase.co/functions/v1/reaction-factory-cloud';
-const qs=new URLSearchParams(location.search);const key=qs.get('key')||'';const $=id=>document.getElementById(id);
-function fmt(v){if(!v)return '-';const d=new Date(v);return Number.isNaN(d.getTime())?v:d.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}
-function validUrl(value){try{const u=new URL(value);return u.protocol==='http:'||u.protocol==='https:'}catch{return false}}
-async function status(){
-  if(!key){$('err').textContent='Private dashboard key missing. Open your saved Reaction Factory dashboard link.';$('err').className='msg bad';return}
-  try{
-    const r=await fetch(CLOUD+'?op=status&key='+encodeURIComponent(key),{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Status failed');
-    $('waiting').textContent=d.queue_waiting||0;$('posted').textContent=d.posted||0;$('last').textContent=fmt(d.last_success);$('next').textContent=fmt(d.next_run);$('err').textContent=d.last_error?'Last error: '+d.last_error:'Cloud connected. No current errors.';$('err').className='msg '+(d.last_error?'bad':'ok');
-    const h=$('history');h.innerHTML='';const items=d.history||[];if(!items.length){h.innerHTML='<div class="sub">No Reel history yet.</div>';return}
-    items.forEach(x=>{const div=document.createElement('div');div.className='item';const b=document.createElement('b');const state=(x.status||'').toUpperCase();b.textContent=state+' · '+fmt(x.at);b.className=x.status==='success'?'ok':(x.status==='idle'?'warn':'bad');div.appendChild(b);if(x.url){const s=document.createElement('small');s.textContent=x.url;div.appendChild(s)}if(x.instagram_permalink){const a=document.createElement('a');a.className='open';a.target='_blank';a.rel='noopener';a.href=x.instagram_permalink;a.textContent='Open posted Reel →';div.appendChild(a)}if(x.error){const e=document.createElement('small');e.textContent=x.error;div.appendChild(e)}h.appendChild(div)})
-  }catch(e){$('err').textContent=e.message;$('err').className='msg bad'}
-}
-$('go').addEventListener('click',async()=>{
-  const url=$('url').value.trim();
-  if(!key){$('msg').textContent='Private dashboard key missing. Open your saved dashboard link.';$('msg').className='msg bad';return}
-  if(!url){$('msg').textContent='Paste a Reel/video URL first.';$('msg').className='msg bad';return}
-  if(!validUrl(url)){$('msg').textContent='That does not look like a valid http/https URL.';$('msg').className='msg bad';return}
-  if(!$('rights').checked){$('msg').textContent='Confirm source rights/permission first.';$('msg').className='msg bad';return}
-  $('go').disabled=true;$('msg').textContent='Sending URL to Reaction Factory cloud...';$('msg').className='msg';
-  try{
-    const r=await fetch(CLOUD+'?op=queue&key='+encodeURIComponent(key),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Queue failed');
-    $('msg').textContent='Queued ✅ Next cloud run will download → edit → create caption/tags → post to Instagram.';$('msg').className='msg ok';$('url').value='';$('rights').checked=false;await status()
-  }catch(e){$('msg').textContent=e.message;$('msg').className='msg bad'}finally{$('go').disabled=false}
-});
-status();setInterval(status,10000);
+const qs = new URLSearchParams(location.search);
+const key = qs.get('key') || '';
+const target = 'https://zlnhaqzawbzagraxhmlb.supabase.co/functions/v1/reaction-factory-cloud' + (key ? '?key=' + encodeURIComponent(key) : '');
+location.replace(target);
 </script>
-</body>
+</head>
+<body style="background:#090d14;color:#fff;font-family:system-ui;padding:24px">Opening Reaction Factory…</body>
 </html>
