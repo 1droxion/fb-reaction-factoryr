@@ -6,46 +6,76 @@ from autopilot import load_state, parse_dt, run_cycle
 from cloud_sync import load_env, pull_reactions, pull_state, push_state
 
 ROOT = Path(__file__).resolve().parent
-URLS_FILE = ROOT / "data" / "approved_urls.txt"
+DATA = ROOT / "data"
+URLS_FILE = DATA / "approved_urls.txt"
+FEEDS_FILE = DATA / "source_feeds.txt"
+
+# Keep direct approved URLs for one-off processing.
 SEED_URLS = [
     "https://www.instagram.com/reel/DEUj3fkshcA/",
 ]
 
+# Approved discovery accounts. Use profile URLs (not /reels/) so
+# auto_discover.py can resolve the username through Meta business discovery.
+SEED_SOURCE_FEEDS = [
+    "https://www.instagram.com/kapilsharmafp55/",
+]
 
-def seed_approved_urls():
-    URLS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not URLS_FILE.exists():
-        URLS_FILE.write_text("# AutoPilot queue. One approved source URL per line.\n", encoding="utf-8")
+
+def append_missing(path, header, values, label):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(header, encoding="utf-8")
 
     existing = {
         line.strip()
-        for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     }
-    additions = [url for url in SEED_URLS if url not in existing]
+    additions = [value for value in values if value not in existing]
     if not additions:
         return
 
-    current = URLS_FILE.read_text(encoding="utf-8")
-    with URLS_FILE.open("a", encoding="utf-8") as f:
+    current = path.read_text(encoding="utf-8")
+    with path.open("a", encoding="utf-8") as handle:
         if current and not current.endswith("\n"):
-            f.write("\n")
-        for url in additions:
-            f.write(url + "\n")
-            print(f"Queued approved source: {url}")
+            handle.write("\n")
+        for value in additions:
+            handle.write(value + "\n")
+            print(f"Added {label}: {value}")
+
+
+def seed_sources():
+    append_missing(
+        URLS_FILE,
+        "# AutoPilot queue. One approved source URL per line.\n",
+        SEED_URLS,
+        "approved source URL",
+    )
+    append_missing(
+        FEEDS_FILE,
+        (
+            "# Approved discovery feeds. Only include accounts/content you own "
+            "or have permission/license to reuse.\n"
+        ),
+        SEED_SOURCE_FEEDS,
+        "approved discovery source",
+    )
 
 
 def main():
     load_env()
     pull_reactions()
     pull_state()
-    seed_approved_urls()
+    seed_sources()
 
     state = load_state()
     target = parse_dt(state.get("next_run"))
     now = datetime.now().astimezone()
     if target and target > now:
         print(f"Not due yet. Next post window: {target.isoformat(timespec='minutes')}")
+        # Persist newly seeded sources even when the posting window is not due yet.
+        push_state()
         return
 
     status = None
