@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,6 +38,13 @@ def ytdlp():
     if not exe:
         raise RuntimeError("yt-dlp is not installed.")
     return exe
+
+
+def youtube_auth_args():
+    path = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+    if path and Path(path).exists():
+        return ["--cookies", path]
+    return []
 
 
 def run_json(args, timeout=120):
@@ -98,13 +106,12 @@ def duration_allowed(info):
 
 def creative_commons_allowed(info):
     license_text = str(info.get("license") or "").strip()
-    lower = license_text.lower()
-    return bool(license_text) and "creative commons" in lower
+    return bool(license_text) and "creative commons" in license_text.lower()
 
 
 def search_entries(query, max_items=25):
     data = run_json([
-        ytdlp(),
+        ytdlp(), *youtube_auth_args(),
         "--flat-playlist",
         "--playlist-end", str(max_items),
         "--dump-single-json",
@@ -130,7 +137,8 @@ def entry_url(item):
 
 def full_info(url):
     return run_json([
-        ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url
+        ytdlp(), *youtube_auth_args(),
+        "--skip-download", "--no-playlist", "--dump-single-json", url
     ])
 
 
@@ -147,12 +155,7 @@ def candidate_from_url(url):
         print(f"SKIP non-Hindi/non-funny: {url}")
         return None
 
-    creator = str(
-        info.get("uploader_id")
-        or info.get("channel")
-        or info.get("uploader")
-        or "YouTube creator"
-    ).strip().lstrip("@")
+    creator = str(info.get("uploader_id") or info.get("channel") or info.get("uploader") or "YouTube creator").strip().lstrip("@")
     title = str(info.get("title") or "Hindi funny video").strip()[:100]
     license_text = str(info.get("license") or "Creative Commons").strip()
     try:
@@ -207,19 +210,12 @@ def discover_one(max_items=25):
         print("No new licensed Creative Commons Hindi funny 35-60s YouTube candidate found.")
         return None
 
-    candidates.sort(
-        key=lambda item: (item.get("view_count", 0), item.get("timestamp", "")),
-        reverse=True,
-    )
+    candidates.sort(key=lambda item: (item.get("view_count", 0), item.get("timestamp", "")), reverse=True)
     selected = candidates[0]
     url = selected["url"]
 
     ensure_queue_file()
-    existing = {
-        line.strip()
-        for line in URLS_FILE.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    }
+    existing = {line.strip() for line in URLS_FILE.read_text(encoding="utf-8").splitlines() if line.strip() and not line.strip().startswith("#")}
     if url not in existing:
         current = URLS_FILE.read_text(encoding="utf-8")
         with URLS_FILE.open("a", encoding="utf-8") as handle:
