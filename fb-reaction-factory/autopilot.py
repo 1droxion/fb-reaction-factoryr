@@ -46,6 +46,7 @@ def blank_state(last_error=None):
         "next_run": None,
         "last_url": None,
         "last_results": None,
+        "current_progress": None,
     }
 
 
@@ -57,6 +58,7 @@ def load_state():
         data.setdefault("processed", {})
         data.setdefault("failed", {})
         data.setdefault("history", [])
+        data.setdefault("current_progress", None)
         return data
     except Exception:
         return blank_state("State file could not be read; starting with a clean state.")
@@ -69,11 +71,7 @@ def save_state(state):
 
 
 def add_history(state, status, url=None, *, error=None, results=None):
-    item = {
-        "at": now_iso(),
-        "status": status,
-        "url": url,
-    }
+    item = {"at": now_iso(), "status": status, "url": url}
     if error:
         item["error"] = str(error)
     if isinstance(results, dict):
@@ -104,12 +102,8 @@ def next_url(state):
 def looks_like_token_error(exc):
     text = str(exc).lower()
     signals = (
-        "access token",
-        "code 190",
-        "subcode 463",
-        "session has expired",
-        "session is invalid",
-        "oauth",
+        "access token", "code 190", "subcode 463",
+        "session has expired", "session is invalid", "oauth",
     )
     return any(s in text for s in signals)
 
@@ -156,22 +150,34 @@ def find_dashboard_url(state):
     return None
 
 
-def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
+def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True, progress_sync=None):
     load_env_file()
     state = load_state()
     url = find_dashboard_url(state)
     if not url:
         state["last_error"] = None
+        state["current_progress"] = None
         next_run = datetime.now().astimezone() + timedelta(hours=interval_hours)
         state["next_run"] = next_run.isoformat(timespec="seconds")
         save_state(state)
+        if progress_sync:
+            progress_sync()
         print("No waiting dashboard URLs. Auto-discovery is OFF.")
         print(f"Next scheduled check window: {state['next_run']}")
         return "idle"
 
     state["last_url"] = url
     state["last_error"] = None
+    state["current_progress"] = {
+        "url": url,
+        "stage": "queued",
+        "status": "done",
+        "detail": "Queued for processing",
+        "updated_at": now_iso(),
+    }
     save_state(state)
+    if progress_sync:
+        progress_sync()
 
     print("\n" + "=" * 68)
     print(f"AUTOPILOT START · {now_iso()}")
@@ -179,34 +185,59 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
     print("Download -> Edit 30/70 -> Caption/Tags -> Publish Instagram")
     print("=" * 68)
 
+    def on_progress(stage, status="active", detail=None, **extra):
+        s = load_state()
+        payload = {
+            "url": url,
+            "stage": stage,
+            "status": status,
+            "detail": detail,
+            "updated_at": now_iso(),
+        }
+        payload.update({k: v for k, v in extra.items() if v is not None})
+        s["current_progress"] = payload
+        s["last_url"] = url
+        s["last_error"] = None
+        save_state(s)
+        if progress_sync:
+            progress_sync()
+
     try:
         results = process_url(
             url,
             publish_fb=publish_facebook,
             publish_ig=publish_instagram,
+            progress_callback=on_progress,
         )
     except Exception as exc:
         state = load_state()
         state["last_url"] = url
         state["last_error"] = str(exc)
+        state["current_progress"] = {
+            "url": url,
+            "stage": "failed",
+            "status": "error",
+            "detail": str(exc),
+            "updated_at": now_iso(),
+        }
         if looks_like_token_error(exc):
             retry_at = datetime.now().astimezone() + timedelta(minutes=TOKEN_RETRY_MINUTES)
             state["next_run"] = retry_at.isoformat(timespec="seconds")
             add_history(state, "token_error", url, error=exc)
             save_state(state)
+            if progress_sync:
+                progress_sync()
             print("\nMETA TOKEN NEEDS REFRESH")
             print("Run: python3 meta_connect.py")
             print(f"AutoPilot will retry this same URL after {TOKEN_RETRY_MINUTES} minutes.")
             return "token_error"
 
-        state.setdefault("failed", {})[url] = {
-            "error": str(exc),
-            "at": now_iso(),
-            "skip": True,
-        }
+        state.setdefault("failed", {})[url] = {"error": str(exc), "at": now_iso(), "skip": True}
         state["next_run"] = datetime.now().astimezone().isoformat(timespec="seconds")
         add_history(state, "failed", url, error=exc)
         save_state(state)
+        if progress_sync:
+            progress_sync()
         print(f"\nSKIPPING FAILED URL: {exc}")
         return "failed"
 
@@ -216,10 +247,20 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
     state["last_success"] = now_iso()
     state["last_error"] = None
     state["last_results"] = results
+    state["current_progress"] = {
+        "url": url,
+        "stage": "posted",
+        "status": "done",
+        "detail": "Posted to Instagram",
+        "updated_at": now_iso(),
+        "instagram_permalink": ((results.get("instagram") or {}).get("permalink") if isinstance(results, dict) else None),
+    }
     next_run = datetime.now().astimezone() + timedelta(hours=interval_hours)
     state["next_run"] = next_run.isoformat(timespec="seconds")
     add_history(state, "success", url, results=results)
     save_state(state)
+    if progress_sync:
+        progress_sync()
 
     print("\nAUTOPILOT POST SUCCESS")
     print(f"Next normal post window: {state['next_run']}")
@@ -245,11 +286,7 @@ def loop(interval_hours, publish_instagram=True, publish_facebook=True):
                 if STOP:
                     break
 
-            status = run_cycle(
-                interval_hours,
-                publish_instagram=publish_instagram,
-                publish_facebook=publish_facebook,
-            )
+            status = run_cycle(interval_hours, publish_instagram=publish_instagram, publish_facebook=publish_facebook)
             if status == "idle":
                 time.sleep(IDLE_POLL_SECONDS)
             elif status in {"failed", "token_error"}:
