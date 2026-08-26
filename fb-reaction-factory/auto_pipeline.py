@@ -27,7 +27,8 @@ URLS_FILE = DATA / "approved_urls.txt"
 STATE_FILE = DATA / "auto_pipeline_state.json"
 DISCOVERY_STATE_FILE = DATA / "discovery_state.json"
 ENV_FILE = ROOT / ".env"
-MIN_SECONDS = 4.0
+MIN_SECONDS = 35.0
+MAX_SECONDS = 60.0
 TARGET_SECONDS = 60
 
 for p in (DATA, OUTPUT, SOURCES, INBOX):
@@ -145,7 +146,6 @@ def ytdlp():
 
 
 def source_context_from_url(url):
-    """Best-effort context for title/caption generation. Never blocks processing."""
     try:
         p = subprocess.run(
             [ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url],
@@ -259,13 +259,13 @@ def clean_caption_seed(source):
 def process_url(url, publish_fb=False, publish_ig=False):
     require_explicit_approval(url)
 
-    # Read the source title/description before download when the platform exposes it.
-    # This gives the metadata generator useful context while keeping the dashboard one-click.
     source_context = source_context_from_url(url)
     source = download_url(url)
     duration = ffprobe_duration(source)
-    if duration < MIN_SECONDS:
-        raise RuntimeError(f"Source is only {duration:.1f}s. Need at least {MIN_SECONDS:.0f}s.")
+    if duration < MIN_SECONDS or duration > MAX_SECONDS:
+        raise RuntimeError(
+            f"Source is {duration:.1f}s. AutoPilot requires {MIN_SECONDS:.0f}-{MAX_SECONDS:.0f}s."
+        )
 
     caption_seed = source_context or clean_caption_seed(source)
     video, reaction_used = make_reel(
