@@ -25,7 +25,12 @@ def main():
 
     status = None
     try:
-        status = run_cycle(3.0, publish_instagram=True, publish_facebook=False)
+        status = run_cycle(
+            3.0,
+            publish_instagram=True,
+            publish_facebook=False,
+            progress_sync=push_state,
+        )
     finally:
         push_state()
 
