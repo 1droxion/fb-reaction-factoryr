@@ -10,6 +10,7 @@ from pathlib import Path
 
 from auto_discover import discover_and_queue_one
 from auto_pipeline import approved_urls, load_env_file, process_url
+from youtube_cc_discover import discover_one as discover_youtube_cc_one
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
@@ -142,7 +143,7 @@ def print_status(state):
     waiting = max(0, len(urls) - done - skipped)
     print("\nREACTION FACTORY AUTOPILOT STATUS")
     print(f"Queue: {len(urls)} total · {waiting} waiting · {done} posted · {skipped} skipped")
-    print("Discovery: approved sources only (data/source_feeds.txt)")
+    print("Discovery: approved Instagram sources, then Creative Commons YouTube Hindi comedy")
     print(f"Last success: {state.get('last_success') or 'none'}")
     print(f"Next run: {state.get('next_run') or 'as soon as a URL is available'}")
     if state.get("last_error"):
@@ -154,11 +155,21 @@ def find_or_discover_url(state):
     if url:
         return url
 
-    print("Queue empty. Scanning approved discovery sources...")
+    print("Queue empty. Scanning approved Instagram discovery sources...")
     try:
         discovered = discover_and_queue_one(max_items=20)
     except Exception as exc:
-        print(f"Discovery error: {exc}")
+        print(f"Instagram discovery error: {exc}")
+        discovered = None
+
+    if discovered:
+        return next_url(state) or discovered
+
+    print("No Instagram candidate. Searching licensed YouTube Hindi comedy...")
+    try:
+        discovered = discover_youtube_cc_one(max_items=25)
+    except Exception as exc:
+        print(f"YouTube Creative Commons discovery error: {exc}")
         return None
 
     if not discovered:
@@ -176,7 +187,7 @@ def run_cycle(interval_hours, publish_instagram=True, publish_facebook=True):
         next_run = datetime.now().astimezone() + timedelta(hours=interval_hours)
         state["next_run"] = next_run.isoformat(timespec="seconds")
         save_state(state)
-        print("No waiting URLs and no new approved-source candidates.")
+        print("No waiting URLs and no new licensed/approved candidates.")
         print(f"Next scan window: {state['next_run']}")
         return "idle"
 
@@ -242,7 +253,7 @@ def loop(interval_hours, publish_instagram=True, publish_facebook=True):
     print("Reaction Factory AutoPilot is ON")
     print(f"Cadence: one Reel every {interval_hours:g} hours")
     print("Queue file: data/approved_urls.txt")
-    print("Approved discovery sources: data/source_feeds.txt")
+    print("Discovery: approved Instagram sources + Creative Commons YouTube")
     print("Press Ctrl+C to stop AutoPilot.")
 
     try:
@@ -283,7 +294,7 @@ def main():
     signal.signal(signal.SIGINT, handle_stop)
     signal.signal(signal.SIGTERM, handle_stop)
 
-    ap = argparse.ArgumentParser(description="Reaction Factory approved-source discovery + publishing autopilot")
+    ap = argparse.ArgumentParser(description="Reaction Factory approved/licensed discovery + publishing autopilot")
     ap.add_argument("--interval-hours", type=float, default=DEFAULT_INTERVAL_HOURS)
     ap.add_argument("--instagram-only", action="store_true", help="Publish to Instagram only")
     ap.add_argument("--facebook-only", action="store_true", help="Publish to TVMind USA Page only")
