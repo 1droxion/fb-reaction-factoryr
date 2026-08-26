@@ -100,11 +100,6 @@ def use_saved_page_token():
     me, me_error = graph_get_path("me", PAGE_TOKEN, fields="id,name")
     if not me:
         raise SystemExit("META_PAGE_ACCESS_TOKEN is invalid: " + str(me_error))
-    if str(me.get("id") or "") != PAGE_ID:
-        raise SystemExit(
-            "META_PAGE_ACCESS_TOKEN is not a Page access token for the configured Facebook Page. "
-            "Generate the Page token for META_PAGE_ID and replace the GitHub secret."
-        )
 
     page, page_error = graph_get_path(
         PAGE_ID,
@@ -113,7 +108,7 @@ def use_saved_page_token():
     )
     if not page or str(page.get("id") or "") != PAGE_ID:
         raise SystemExit(
-            "META_PAGE_ACCESS_TOKEN cannot access the configured Page: "
+            "META_PAGE_ACCESS_TOKEN cannot access the configured Facebook Page: "
             + str(page_error or "wrong Page returned")
         )
 
@@ -126,9 +121,10 @@ def use_saved_page_token():
         values["META_IG_USERNAME"] = ig_username
     write_github_env(values)
 
-    print("Meta preflight: saved Page access token is valid.")
+    print("Meta preflight: saved automation token is valid.")
+    print("Meta preflight: configured Facebook Page access is valid.")
     print("Meta preflight: Instagram content publishing access is valid.")
-    print("Meta preflight: using META_PAGE_ACCESS_TOKEN directly; user-token refresh is not required.")
+    print("Meta preflight: using META_PAGE_ACCESS_TOKEN as the stable automation token; user-token refresh is not required.")
 
 
 def granted_user_permissions():
@@ -162,7 +158,7 @@ def use_user_token_fallback():
     if not USER_TOKEN:
         raise SystemExit(
             "META_PAGE_ACCESS_TOKEN is unusable and META_USER_ACCESS_TOKEN is also missing. "
-            "Save a valid Page access token in GitHub Actions as META_PAGE_ACCESS_TOKEN."
+            "Save a valid stable Meta automation token in GitHub Actions as META_PAGE_ACCESS_TOKEN."
         )
 
     granted, permission_error = granted_user_permissions()
@@ -219,7 +215,7 @@ def main():
         except SystemExit as exc:
             if not USER_TOKEN:
                 raise
-            print(f"Meta preflight warning: saved Page token failed validation: {exc}")
+            print(f"Meta preflight warning: saved automation token failed validation: {exc}")
             print("Meta preflight: falling back to META_USER_ACCESS_TOKEN so automation can keep running.")
 
     use_user_token_fallback()
