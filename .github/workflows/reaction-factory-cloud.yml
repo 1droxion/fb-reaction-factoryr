@@ -49,12 +49,14 @@ jobs:
       - name: Prepare authenticated YouTube session
         shell: bash
         run: |
+          mkdir -p "$HOME/.config/yt-dlp"
           if [ -n "${YOUTUBE_COOKIES:-}" ]; then
             printf '%s' "$YOUTUBE_COOKIES" > "$YOUTUBE_COOKIES_FILE"
             chmod 600 "$YOUTUBE_COOKIES_FILE"
-            echo "YouTube authenticated session enabled."
+            printf '%s\n' "--cookies $YOUTUBE_COOKIES_FILE" "--js-runtimes node" > "$HOME/.config/yt-dlp/config"
+            echo "YouTube authenticated session enabled for all yt-dlp calls."
           else
-            rm -f "$YOUTUBE_COOKIES_FILE"
+            rm -f "$YOUTUBE_COOKIES_FILE" "$HOME/.config/yt-dlp/config"
             echo "YouTube cookies secret is not configured."
           fi
 
