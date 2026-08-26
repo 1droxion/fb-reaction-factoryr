@@ -1,2 +1,2 @@
-trigger_id=queued-download-fix-20260826-01
-reason=process_dashboard_queue_now
+trigger_id=queued-dashboard-20260826-1735
+reason=process_latest_dashboard_queue
