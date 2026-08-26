@@ -137,8 +137,13 @@ def is_direct_post(url):
 def normalize_url(item):
     for key in ("webpage_url", "original_url", "url"):
         value = item.get(key)
-        if isinstance(value, str) and value.startswith(("http://", "https://")):
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value.startswith(("http://", "https://")):
             return canonical_url(value)
+        if value.startswith("/") and "/" in value:
+            return canonical_url("https://www.instagram.com" + value)
     return None
 
 
@@ -212,14 +217,14 @@ def meta_instagram_media(username, max_items=20):
         if str(item.get("media_type") or "").upper() != "VIDEO":
             continue
         media_url = str(item.get("media_url") or "").strip()
-        if not media_url:
+        permalink = canonical_url(str(item.get("permalink") or "").strip())
+        if not permalink and not media_url:
             continue
         caption = str(item.get("caption") or "")
-        permalink = canonical_url(str(item.get("permalink") or "").strip())
         media_id = str(item.get("id") or "").strip()
         points = sum(2 for word in KEYWORDS if word in caption.lower())
         candidates.append({
-            "url": media_url,
+            "url": permalink or media_url,
             "permalink": permalink,
             "seen_key": media_id or permalink or media_url,
             "title": caption[:120] or f"Funny candidate from @{username}",
@@ -250,6 +255,62 @@ def full_info(url):
     return run_json([ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url])
 
 
+def scrape_instagram_profile_links(username, max_items=20):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    found = []
+    seen = set()
+    for page_url in (
+        f"https://www.instagram.com/{username}/",
+        f"https://www.instagram.com/{username}/reels/",
+    ):
+        try:
+            response = requests.get(page_url, headers=headers, timeout=30)
+            if not response.ok:
+                continue
+            text = response.text.replace("\\/", "/")
+        except Exception:
+            continue
+
+        for match in re.finditer(r"/(reel|p)/([A-Za-z0-9_-]{5,})/?", text, re.I):
+            kind = "reel" if match.group(1).lower() == "reel" else "p"
+            url = f"https://www.instagram.com/{kind}/{match.group(2)}/"
+            if url in seen:
+                continue
+            seen.add(url)
+            found.append({"webpage_url": url})
+            if len(found) >= max_items:
+                return found
+    return found
+
+
+def public_instagram_entries(feed_url, username, max_items=20):
+    errors = []
+    targets = [feed_url, f"https://www.instagram.com/{username}/reels/"]
+    for target in targets:
+        try:
+            items = collect_entries(target, max_items=max_items)
+            if items:
+                print(f"Public Instagram fallback succeeded with yt-dlp: {target}")
+                return items
+        except Exception as exc:
+            errors.append(str(exc))
+
+    items = scrape_instagram_profile_links(username, max_items=max_items)
+    if items:
+        print(f"Public Instagram fallback found {len(items)} post links from the profile page.")
+        return items
+
+    if errors:
+        raise RuntimeError(errors[-1])
+    raise RuntimeError("No public Instagram post links were discoverable.")
+
+
 def safe_int(value):
     try:
         return int(value or 0)
@@ -276,6 +337,51 @@ def score(info):
     return points
 
 
+def candidates_from_entries(items, seen, *, source_account=None, method="public_feed"):
+    candidates = []
+    for item in items:
+        url = normalize_url(item)
+        if not url or url in seen:
+            continue
+
+        try:
+            info = full_info(url)
+        except Exception as exc:
+            print(f"Candidate metadata unavailable; keeping URL for processing: {url} ({exc})")
+            candidates.append({
+                "url": url,
+                "seen_key": url,
+                "title": f"Instagram candidate from @{source_account}" if source_account else "Instagram candidate",
+                "duration": 0.0,
+                "score": 1,
+                "view_count": 0,
+                "timestamp": "",
+                "source_account": source_account,
+                "discovery_method": method,
+            })
+            continue
+
+        try:
+            duration = float(info.get("duration") or 0)
+        except Exception:
+            duration = 0.0
+        if 0 < duration < MIN_SECONDS:
+            seen.add(url)
+            continue
+        candidates.append({
+            "url": url,
+            "seen_key": url,
+            "title": info.get("title") or "",
+            "duration": duration,
+            "score": score(info),
+            "view_count": safe_int(info.get("view_count")),
+            "timestamp": str(info.get("timestamp") or info.get("upload_date") or ""),
+            "source_account": source_account,
+            "discovery_method": method,
+        })
+    return candidates
+
+
 def discover_candidates(max_items=20):
     state = load_state()
     seen = set(state.get("seen", []))
@@ -287,47 +393,36 @@ def discover_candidates(max_items=20):
             print(f"Scanning approved Instagram source: @{username}")
             try:
                 items = meta_instagram_media(username, max_items=max_items)
+                for candidate in items:
+                    key = candidate.get("seen_key") or candidate.get("permalink") or candidate.get("url")
+                    if key and key not in seen:
+                        candidates.append(candidate)
+                if items:
+                    continue
             except Exception as exc:
-                print(f"SKIP Instagram source: {exc}")
-                continue
-            for candidate in items:
-                key = candidate.get("seen_key") or candidate.get("permalink") or candidate.get("url")
-                if key and key not in seen:
-                    candidates.append(candidate)
+                print(f"Meta Instagram discovery unavailable: {exc}")
+                print("Trying public-profile fallback instead...")
+
+            try:
+                public_items = public_instagram_entries(feed, username, max_items=max_items)
+                candidates.extend(
+                    candidates_from_entries(
+                        public_items,
+                        seen,
+                        source_account=username,
+                        method="public_instagram_fallback",
+                    )
+                )
+            except Exception as exc:
+                print(f"SKIP Instagram source after fallback: {exc}")
             continue
 
         print(f"Scanning approved funny-video source: {feed}")
         try:
             items = collect_entries(feed, max_items=max_items)
+            candidates.extend(candidates_from_entries(items, seen))
         except Exception as exc:
             print(f"SKIP source: {exc}")
-            continue
-
-        for item in items:
-            url = normalize_url(item)
-            if not url or url in seen:
-                continue
-            try:
-                info = full_info(url)
-            except Exception as exc:
-                print(f"SKIP candidate metadata: {url} ({exc})")
-                continue
-            try:
-                duration = float(info.get("duration") or 0)
-            except Exception:
-                duration = 0.0
-            if 0 < duration < MIN_SECONDS:
-                seen.add(url)
-                continue
-            candidates.append({
-                "url": url,
-                "seen_key": url,
-                "title": info.get("title") or "",
-                "duration": duration,
-                "score": score(info),
-                "view_count": safe_int(info.get("view_count")),
-                "timestamp": str(info.get("timestamp") or info.get("upload_date") or ""),
-            })
 
     state["seen"] = sorted(seen)
     save_state(state)
