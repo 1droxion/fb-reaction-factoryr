@@ -35,6 +35,15 @@ for p in (DATA, OUTPUT, SOURCES, INBOX):
     p.mkdir(parents=True, exist_ok=True)
 
 
+def emit_progress(callback, stage, status="active", detail=None, **extra):
+    if not callback:
+        return
+    try:
+        callback(stage=stage, status=status, detail=detail, **extra)
+    except Exception as exc:
+        print(f"Progress update warning: {exc}")
+
+
 def load_env_file():
     if not ENV_FILE.exists():
         return
@@ -256,21 +265,34 @@ def clean_caption_seed(source):
     return raw or "funny reaction"
 
 
-def process_url(url, publish_fb=False, publish_ig=False):
+def process_url(url, publish_fb=False, publish_ig=False, progress_callback=None):
     require_explicit_approval(url)
 
+    emit_progress(progress_callback, "downloading", detail="Downloading source Reel")
     source_context = source_context_from_url(url)
     source = download_url(url)
     duration = ffprobe_duration(source)
+    emit_progress(
+        progress_callback,
+        "downloaded",
+        status="done",
+        detail=f"Download complete · {duration:.1f}s",
+        duration_seconds=round(duration, 1),
+    )
+
     if duration < MIN_SECONDS or duration > MAX_SECONDS:
         raise RuntimeError(
             f"Source is {duration:.1f}s. AutoPilot requires {MIN_SECONDS:.0f}-{MAX_SECONDS:.0f}s."
         )
 
     caption_seed = source_context or clean_caption_seed(source)
+    emit_progress(progress_callback, "editing", detail="Making 30/70 reaction edit")
     video, reaction_used = make_reel(
         str(source), caption=caption_seed, reaction="auto", rights_ok=True
     )
+    emit_progress(progress_callback, "edited", status="done", detail="Reaction edit complete")
+
+    emit_progress(progress_callback, "metadata", detail="Creating title, caption and tags")
     metadata = generate_metadata(caption_seed)
     text_path, json_path, post_text = write_package(
         Path(video), metadata,
@@ -285,6 +307,14 @@ def process_url(url, publish_fb=False, publish_ig=False):
         },
     )
     post_text = add_source_disclosure(post_text, text_path, json_path, url)
+    emit_progress(
+        progress_callback,
+        "metadata_done",
+        status="done",
+        detail="Title, caption and tags ready",
+        title=metadata.get("title"),
+        hashtags=metadata.get("hashtags"),
+    )
 
     print("\nREADY")
     print(f"Video: {video}")
@@ -299,11 +329,21 @@ def process_url(url, publish_fb=False, publish_ig=False):
         print(f"Facebook success. Video ID: {results['facebook'].get('video_id')}")
 
     if publish_ig:
+        emit_progress(progress_callback, "uploading", detail="Uploading Reel to Instagram")
         print("\nPublishing to Instagram...")
         results["instagram"] = publish_instagram(video, post_text)
         print(f"Instagram success. Media ID: {results['instagram'].get('media_id')}")
-        if results["instagram"].get("permalink"):
-            print(f"Instagram permalink: {results['instagram']['permalink']}")
+        permalink = results["instagram"].get("permalink")
+        if permalink:
+            print(f"Instagram permalink: {permalink}")
+        emit_progress(
+            progress_callback,
+            "posted",
+            status="done",
+            detail="Posted to Instagram",
+            instagram_media_id=results["instagram"].get("media_id"),
+            instagram_permalink=permalink,
+        )
 
     return results
 
