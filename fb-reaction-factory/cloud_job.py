@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -69,14 +70,17 @@ def main():
     pull_state()
     seed_sources()
 
+    force_now = os.getenv("REACTION_FACTORY_FORCE_NOW", "").strip() == "1"
     state = load_state()
     target = parse_dt(state.get("next_run"))
     now = datetime.now().astimezone()
-    if target and target > now:
+    if target and target > now and not force_now:
         print(f"Not due yet. Next post window: {target.isoformat(timespec='minutes')}")
-        # Persist newly seeded sources even when the posting window is not due yet.
         push_state()
         return
+
+    if force_now:
+        print("One-time POST NOW trigger received; bypassing the current wait window.")
 
     status = None
     try:
