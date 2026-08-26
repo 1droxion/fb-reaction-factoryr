@@ -11,9 +11,12 @@ DATA = ROOT / "data"
 URLS_FILE = DATA / "approved_urls.txt"
 FEEDS_FILE = DATA / "source_feeds.txt"
 
-# Keep direct approved URLs for one-off processing.
+# Keep direct approved URLs for one-off processing. These are merged into the
+# private cloud queue after cloud state is restored, so a dashboard handoff
+# failure cannot lose an explicitly approved manual test URL.
 SEED_URLS = [
     "https://www.instagram.com/reel/DEUj3fkshcA/",
+    "https://www.instagram.com/reel/DYirjayPPNA/",
 ]
 
 # Approved discovery accounts. Use profile URLs (not /reels/) so
