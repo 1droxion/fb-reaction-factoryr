@@ -27,6 +27,8 @@ jobs:
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
       META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+      YOUTUBE_COOKIES_FILE: ${{ runner.temp }}/reaction-factory-youtube-cookies.txt
       REACTION_FACTORY_FORCE_NOW: ${{ github.event_name == 'push' && '1' || '0' }}
 
     steps:
@@ -43,6 +45,18 @@ jobs:
 
       - name: Install Python requirements
         run: python -m pip install -r requirements.txt
+
+      - name: Prepare authenticated YouTube session
+        shell: bash
+        run: |
+          if [ -n "${YOUTUBE_COOKIES:-}" ]; then
+            printf '%s' "$YOUTUBE_COOKIES" > "$YOUTUBE_COOKIES_FILE"
+            chmod 600 "$YOUTUBE_COOKIES_FILE"
+            echo "YouTube authenticated session enabled."
+          else
+            rm -f "$YOUTUBE_COOKIES_FILE"
+            echo "YouTube cookies secret is not configured."
+          fi
 
       - name: Validate and refresh Meta credentials
         run: python meta_preflight.py
