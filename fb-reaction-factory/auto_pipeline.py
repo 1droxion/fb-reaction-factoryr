@@ -42,8 +42,6 @@ def load_env_file():
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        # Always overwrite the current process environment so a freshly
-        # refreshed token from meta_connect.py is picked up without restart.
         os.environ[key.strip()] = value.strip()
 
 
@@ -146,6 +144,36 @@ def ytdlp():
     return exe
 
 
+def source_context_from_url(url):
+    """Best-effort context for title/caption generation. Never blocks processing."""
+    try:
+        p = subprocess.run(
+            [ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if p.returncode != 0 or not p.stdout.strip():
+            return None
+        info = json.loads(p.stdout)
+        parts = []
+        for key in ("title", "description"):
+            value = str(info.get(key) or "").strip()
+            if value:
+                parts.append(value)
+        uploader = str(info.get("uploader") or info.get("channel") or "").strip()
+        if uploader:
+            parts.append(f"creator {uploader}")
+        text = " ".join(parts)
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            return text[:500]
+    except Exception:
+        pass
+    return None
+
+
 def google_drive_direct_url(url):
     parsed = urlparse(url)
     host = parsed.netloc.lower()
@@ -179,8 +207,6 @@ def direct_download(url, token):
 
 
 def download_url(url):
-    # Instagram gets its dedicated public-page fallback path, matching dashboard.py.
-    # It does not bypass private/login-only/age/region/audience restrictions.
     if is_instagram_url(url):
         print("Downloading approved Instagram Reel...")
         return download_instagram_reel(url)
@@ -231,16 +257,17 @@ def clean_caption_seed(source):
 
 
 def process_url(url, publish_fb=False, publish_ig=False):
-    # Safety/rights gate: process_url cannot silently turn an arbitrary public URL
-    # into a publishable Reel. It must already be in the explicit approved queue.
     require_explicit_approval(url)
 
+    # Read the source title/description before download when the platform exposes it.
+    # This gives the metadata generator useful context while keeping the dashboard one-click.
+    source_context = source_context_from_url(url)
     source = download_url(url)
     duration = ffprobe_duration(source)
     if duration < MIN_SECONDS:
         raise RuntimeError(f"Source is only {duration:.1f}s. Need at least {MIN_SECONDS:.0f}s.")
 
-    caption_seed = clean_caption_seed(source)
+    caption_seed = source_context or clean_caption_seed(source)
     video, reaction_used = make_reel(
         str(source), caption=caption_seed, reaction="auto", rights_ok=True
     )
@@ -254,6 +281,7 @@ def process_url(url, publish_fb=False, publish_ig=False):
             "target_reel_seconds": TARGET_SECONDS,
             "source_looped": False,
             "rights_gate": "approved_queue",
+            "source_context_used": bool(source_context),
         },
     )
     post_text = add_source_disclosure(post_text, text_path, json_path, url)
