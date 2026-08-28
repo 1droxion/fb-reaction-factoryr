@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 import auto_pipeline
-from autopilot import load_state, parse_dt, run_cycle, save_state
+from autopilot import load_state, next_url, parse_dt, run_cycle, save_state
 from cloud_sync import load_env, pull_reactions, pull_state, push_state
 
 
@@ -43,12 +43,19 @@ def main():
 
     state = clear_old_length_skips()
     force_now = os.getenv("REACTION_FACTORY_FORCE_NOW", "").strip() == "1"
+    waiting_url = next_url(state)
     target = parse_dt(state.get("next_run"))
     now = datetime.now().astimezone()
-    if target and target > now and not force_now:
-        print(f"Not due yet. Next post window: {target.isoformat(timespec='minutes')}")
+
+    # A URL pasted into the private dashboard is always an immediate job.
+    # The old 3-hour next_run window is only a fallback when the queue is empty.
+    if target and target > now and not force_now and not waiting_url:
+        print(f"Not due yet. Next fallback check window: {target.isoformat(timespec='minutes')}")
         push_state()
         return
+
+    if waiting_url and target and target > now and not force_now:
+        print("Queued dashboard URL found; bypassing the 3-hour wait window.")
 
     if force_now:
         print("One-time POST NOW trigger received; bypassing the current wait window.")
