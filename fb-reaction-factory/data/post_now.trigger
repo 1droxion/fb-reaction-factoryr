@@ -1,2 +1,2 @@
-trigger_id=queued-dashboard-20260826-1735
-reason=process_latest_dashboard_queue
+trigger_id=queued-dashboard-20260828-0916
+reason=process_dashboard_queue_immediately
