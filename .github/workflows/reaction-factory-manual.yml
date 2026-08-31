@@ -27,6 +27,7 @@ jobs:
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
       META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      REACTION_FACTORY_FORCE_NOW: '1'
 
     steps:
       - name: Checkout repository
@@ -46,5 +47,5 @@ jobs:
       - name: Validate Meta credentials
         run: python meta_preflight.py
 
-      - name: Process queued dashboard URL
+      - name: Process queued dashboard URL immediately
         run: python cloud_job.py
