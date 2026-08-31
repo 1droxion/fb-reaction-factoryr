@@ -73,13 +73,13 @@ def process_job(job_id, url, mode, rights_ok):
 
         set_job(stage="download", progress=8, message="Downloading source video...", step="download", step_state="running")
         source = get_source(url)
-        duration = ffprobe_duration(source)
-        if duration < MIN_SOURCE_SECONDS: raise RuntimeError(f"Source is only {duration:.1f}s. Need at least 4s.")
-        set_job(progress=30, message=f"Download complete · {duration:.1f}s", step="download", step_state="done")
 
+        # TV Mind USA Direct intentionally skips ffprobe/FFmpeg and all editing.
+        # It only downloads the original file and uploads that file to the Facebook Page.
         if mode == MODE_FB:
-            set_job(stage="edit", progress=45, message="Keeping original video — no reaction edit.", step="edit", step_state="skipped")
-            set_job(stage="caption", progress=60, message="No caption processing — direct post.", step="caption", step_state="skipped")
+            set_job(progress=35, message="Download complete · original video ready", step="download", step_state="done")
+            set_job(stage="edit", progress=50, message="Keeping original video — no reaction edit.", step="edit", step_state="skipped")
+            set_job(stage="caption", progress=65, message="No caption processing — direct post.", step="caption", step_state="skipped")
             load_env_file()
             set_job(stage="publish", progress=80, message="Posting original video to TV Mind USA...", step="publish", step_state="running")
             fb = publish_facebook(source, "")
@@ -91,6 +91,14 @@ def process_job(job_id, url, mode, rights_ok):
             }
             set_job(state="done", stage="done", progress=100, message="Done · original video posted to TV Mind USA.", result=result)
             return
+
+        # Instagram Reaction needs duration probing and FFmpeg-based editing.
+        try:
+            duration = ffprobe_duration(source)
+        except FileNotFoundError as exc:
+            raise RuntimeError("Instagram Reaction needs FFmpeg/ffprobe installed on this computer. TV Mind USA Direct does not.") from exc
+        if duration < MIN_SOURCE_SECONDS: raise RuntimeError(f"Source is only {duration:.1f}s. Need at least 4s.")
+        set_job(progress=30, message=f"Download complete · {duration:.1f}s", step="download", step_state="done")
 
         set_job(stage="edit", progress=38, message="Building reaction Reel...", step="edit", step_state="running")
         seed = clean_caption_seed(source)
