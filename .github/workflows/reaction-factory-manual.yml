@@ -1,21 +1,24 @@
-name: Reaction Factory Manual Dashboard
+name: Reaction Factory Live Worker
 
 on:
   push:
     paths:
       - 'fb-reaction-factory/data/post_now.trigger'
+      - 'fb-reaction-factory/cloud_daemon.py'
+      - 'fb-reaction-factory/cloud_job.py'
+      - '.github/workflows/reaction-factory-manual.yml'
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 */5 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: reaction-factory-manual
+  group: reaction-factory-live-worker
   cancel-in-progress: false
 
 jobs:
-  post-reel:
+  live-worker:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 350
     defaults:
       run:
         working-directory: fb-reaction-factory
@@ -23,11 +26,13 @@ jobs:
       META_PAGE_ID: '1213992321791402'
       META_IG_USER_ID: '17841406232043396'
       META_IG_USERNAME: 'dhruv6x8'
-      META_GRAPH_VERSION: 'v26.0'
+      META_GRAPH_VERSION: v26.0
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
       META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       REACTION_FACTORY_FORCE_NOW: '1'
+      REACTION_FACTORY_POLL_SECONDS: '10'
+      REACTION_FACTORY_MAX_RUNTIME_SECONDS: '19800'
 
     steps:
       - name: Checkout repository
@@ -47,5 +52,5 @@ jobs:
       - name: Validate Meta credentials
         run: python meta_preflight.py
 
-      - name: Process queued dashboard URL immediately
-        run: python cloud_job.py
+      - name: Run continuous dashboard worker
+        run: python cloud_daemon.py
