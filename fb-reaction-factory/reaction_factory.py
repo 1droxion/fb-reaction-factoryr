@@ -118,12 +118,8 @@ def compose(source, reaction, output, max_seconds=60):
     if source_duration < 4:
         raise RuntimeError("Source must be at least 4 seconds for a Reel.")
 
-    # Keep the source video's natural duration, with a hard 60-second Reel cap.
-    # Loop the chosen reaction clip continuously so the reaction never freezes or
-    # disappears before the source Reel finishes.
     duration = min(float(max_seconds), source_duration)
 
-    # 1080x1920: top 30% reaction (576px), bottom 70% source (1344px).
     filter_complex = (
         f"[0:v]scale=1080:576:force_original_aspect_ratio=increase,"
         f"crop=1080:576,setsar=1,fps=30,"
@@ -142,7 +138,8 @@ def compose(source, reaction, output, max_seconds=60):
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "160k",
+        "-profile:v", "high", "-level:v", "4.1",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         str(output),
     ]
