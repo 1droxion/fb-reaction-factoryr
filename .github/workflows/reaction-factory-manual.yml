@@ -6,6 +6,10 @@ on:
       - 'fb-reaction-factory/data/post_now.trigger'
       - 'fb-reaction-factory/cloud_daemon.py'
       - 'fb-reaction-factory/cloud_job.py'
+      - 'fb-reaction-factory/instagram.py'
+      - 'fb-reaction-factory/auto_pipeline.py'
+      - 'fb-reaction-factory/instagram_download.py'
+      - 'fb-reaction-factory/reaction_factory.py'
       - '.github/workflows/reaction-factory-manual.yml'
   schedule:
     - cron: '0 */5 * * *'
@@ -13,7 +17,7 @@ on:
 
 concurrency:
   group: reaction-factory-live-worker
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   live-worker:
