@@ -6,10 +6,15 @@ import requests
 
 def _config():
     page_id = os.getenv("META_PAGE_ID", "").strip()
-    token = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+    token = (
+        os.getenv("META_SYSTEM_USER_ACCESS_TOKEN", "").strip()
+        or os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+    )
     version = os.getenv("META_GRAPH_VERSION", "v26.0").strip()
     if not page_id or not token:
-        raise RuntimeError("Set META_PAGE_ID and META_PAGE_ACCESS_TOKEN first.")
+        raise RuntimeError(
+            "Set META_PAGE_ID and META_SYSTEM_USER_ACCESS_TOKEN (or META_PAGE_ACCESS_TOKEN) first."
+        )
     return page_id, token, version
 
 
@@ -39,15 +44,66 @@ def _meta_json(response, stage):
     raise RuntimeError(detail)
 
 
+def _resolve_page_token(page_id, token, version):
+    """Return a Page access token when given either a Page token or System User token."""
+    endpoint = f"https://graph.facebook.com/{version}/{page_id}"
+
+    # Preferred path for a permanent Business System User token.
+    response = requests.get(
+        endpoint,
+        params={
+            "fields": "id,name,access_token",
+            "access_token": token,
+        },
+        timeout=60,
+    )
+    if response.ok:
+        try:
+            data = response.json()
+        except Exception:
+            data = {}
+        page_token = str(data.get("access_token") or "").strip() if isinstance(data, dict) else ""
+        if page_token:
+            return page_token
+
+    # Compatibility fallback: System User /me/accounts can expose assigned Pages
+    # and their Page-scoped access tokens.
+    accounts = requests.get(
+        f"https://graph.facebook.com/{version}/me/accounts",
+        params={
+            "fields": "id,name,access_token,tasks",
+            "limit": 100,
+            "access_token": token,
+        },
+        timeout=60,
+    )
+    if accounts.ok:
+        try:
+            payload = accounts.json()
+        except Exception:
+            payload = {}
+        for page in payload.get("data", []) if isinstance(payload, dict) else []:
+            if str(page.get("id") or "") == str(page_id):
+                page_token = str(page.get("access_token") or "").strip()
+                if page_token:
+                    return page_token
+
+    # If the supplied credential already is a Page token, use it directly.
+    # If it is a misconfigured System User token, Meta's publish error below will
+    # still provide the authoritative permission error.
+    return token
+
+
 def publish_reel(video_path, description, state="PUBLISHED"):
-    page_id, token, version = _config()
+    page_id, supplied_token, version = _config()
+    token = _resolve_page_token(page_id, supplied_token, version)
+
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(video_path)
     if not video_path.is_file():
         raise RuntimeError(f"Not a video file: {video_path}")
 
-    # Use the explicit Page ID. Some Page tokens do not resolve /me for this edge.
     start_url = f"https://graph.facebook.com/{version}/{page_id}/video_reels"
     start = requests.post(
         start_url,
