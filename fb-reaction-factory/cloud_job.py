@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 import auto_pipeline
+import autopilot
 from autopilot import load_state, next_url, parse_dt, run_cycle, save_state
 from cloud_sync import load_env, pull_reactions, pull_state, push_state
 
@@ -31,6 +32,16 @@ def clear_old_length_skips():
     return state
 
 
+def prefer_latest_dashboard_url(state):
+    preferred = str(state.get("last_url") or "").strip()
+    if preferred:
+        processed = state.setdefault("processed", {})
+        failed = state.setdefault("failed", {})
+        if processed.get(preferred) != "success" and not failed.get(preferred, {}).get("skip"):
+            return preferred
+    return next_url(state)
+
+
 def main():
     load_env()
     pull_reactions()
@@ -43,7 +54,14 @@ def main():
 
     state = clear_old_length_skips()
     force_now = os.getenv("REACTION_FACTORY_FORCE_NOW", "").strip() == "1"
-    waiting_url = next_url(state)
+
+    # POST NOW must process the exact dashboard URL that was just submitted.
+    # The dashboard stores that URL in state.last_url, so temporarily make it
+    # the first choice for this worker run. Older waiting items stay queued.
+    if force_now:
+        autopilot.next_url = prefer_latest_dashboard_url
+
+    waiting_url = prefer_latest_dashboard_url(state) if force_now else next_url(state)
     target = parse_dt(state.get("next_run"))
     now = datetime.now().astimezone()
 
@@ -58,7 +76,9 @@ def main():
         print("Queued dashboard URL found; bypassing the 3-hour wait window.")
 
     if force_now:
-        print("One-time POST NOW trigger received; bypassing the current wait window.")
+        print("One-time POST NOW trigger received; prioritizing the latest dashboard URL.")
+        if waiting_url:
+            print(f"POST NOW source: {waiting_url}")
 
     status = None
     try:
