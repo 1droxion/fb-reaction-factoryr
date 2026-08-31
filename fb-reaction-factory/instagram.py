@@ -7,9 +7,6 @@ import requests
 
 def _config():
     ig_user_id = os.getenv("META_IG_USER_ID", "").strip()
-    # Prefer the Page access token for Instagram publishing. A normal user token
-    # may expire sooner; the Page token is the correct server-side credential
-    # when available for the connected Facebook Page / Instagram account.
     token = (
         os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
         or os.getenv("META_USER_ACCESS_TOKEN", "").strip()
@@ -20,17 +17,18 @@ def _config():
     return ig_user_id, token, version
 
 
-def _json(response):
+def _json(response, step="request"):
     try:
         data = response.json()
     except Exception:
-        data = {"error": {"message": response.text[:500]}}
+        body = (response.text or "").strip()
+        data = {"error": {"message": body[:500] or f"HTTP {response.status_code}"}}
     if not response.ok or "error" in data:
-        error = data.get("error", {})
+        error = data.get("error", {}) if isinstance(data, dict) else {}
         message = error.get("message") or f"HTTP {response.status_code}"
         code = error.get("code")
         subcode = error.get("error_subcode")
-        detail = f"Instagram API error: {message}"
+        detail = f"Instagram {step} error: {message}"
         if code is not None:
             detail += f" (code {code}"
             if subcode is not None:
@@ -54,7 +52,7 @@ def _wait_for_container(container_id, token, version, timeout_seconds):
             },
             timeout=60,
         )
-        data = _json(response)
+        data = _json(response, "container status")
         code = str(data.get("status_code") or "").upper()
         last_status = data.get("status") or data.get("video_status") or code
         if code == "FINISHED":
@@ -67,7 +65,6 @@ def _wait_for_container(container_id, token, version, timeout_seconds):
 
 
 def publish_reel(video_path, caption, timeout_seconds=300):
-    """Upload a local Reel file to Instagram and publish it."""
     ig_user_id, token, version = _config()
     video_path = Path(video_path)
     if not video_path.exists():
@@ -86,7 +83,7 @@ def publish_reel(video_path, caption, timeout_seconds=300):
         },
         timeout=60,
     )
-    create_data = _json(create)
+    create_data = _json(create, "container create")
     container_id = create_data.get("id")
     upload_uri = create_data.get("uri")
     if not container_id or not upload_uri:
@@ -100,11 +97,12 @@ def publish_reel(video_path, caption, timeout_seconds=300):
                 "Authorization": f"OAuth {token}",
                 "offset": "0",
                 "file_size": str(size),
+                "Content-Type": "application/octet-stream",
             },
             data=video_file,
             timeout=900,
         )
-    _json(upload)
+    _json(upload, "video upload")
 
     _wait_for_container(container_id, token, version, timeout_seconds)
 
@@ -117,7 +115,7 @@ def publish_reel(video_path, caption, timeout_seconds=300):
         },
         timeout=60,
     )
-    result = _json(published)
+    result = _json(published, "publish")
     media_id = result.get("id")
 
     permalink = None
@@ -128,7 +126,7 @@ def publish_reel(video_path, caption, timeout_seconds=300):
                 params={"fields": "permalink", "access_token": token},
                 timeout=60,
             )
-            permalink = _json(link_response).get("permalink")
+            permalink = _json(link_response, "permalink").get("permalink")
         except Exception:
             permalink = None
 
