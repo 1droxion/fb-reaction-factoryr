@@ -18,21 +18,51 @@ USER_AGENT = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
     "Mobile/15E148 Safari/604.1"
 )
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 
 
 def is_instagram_url(url: str):
     return bool(re.match(r"^https?://(www\.)?instagram\.com/(reel|reels|p)/", url.strip(), re.I))
 
 
+def _ffmpeg_exe():
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def _video_candidates(token: str):
+    matches = []
+    for path in INBOX.glob(f"instagram_{token}.*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in VIDEO_EXTS:
+            continue
+        if path.stat().st_size < 10000:
+            continue
+        matches.append(path)
+    return sorted(matches, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 def ytdlp_download(url: str, token: str):
     exe = shutil.which("yt-dlp")
     if not exe:
-        raise RuntimeError("yt-dlp is not installed. Run: python3 -m pip install -r requirements.txt")
+        raise RuntimeError("yt-dlp is not installed. Run: python -m pip install -r requirements.txt")
+
+    ffmpeg = _ffmpeg_exe()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is unavailable, so Instagram video+audio cannot be merged safely.")
 
     template = str(INBOX / f"instagram_{token}.%(ext)s")
     cmd = [
         exe,
         "--no-playlist",
+        "--ffmpeg-location", ffmpeg,
         "-f", "bv*+ba/b",
         "--merge-output-format", "mp4",
         "-o", template,
@@ -40,14 +70,20 @@ def ytdlp_download(url: str, token: str):
     ]
     subprocess.run(cmd, check=True)
 
-    matches = sorted(
-        INBOX.glob(f"instagram_{token}.*"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    matches = _video_candidates(token)
     if not matches:
-        raise RuntimeError("yt-dlp finished but no Instagram video file was found.")
-    return matches[0]
+        raise RuntimeError("yt-dlp finished but did not produce a usable video file.")
+
+    # Remove leftover audio-only/partial companion files so the dashboard can
+    # never accidentally select an .m4a as if it were a Reel.
+    chosen = matches[0]
+    for path in INBOX.glob(f"instagram_{token}.*"):
+        if path != chosen and path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    return chosen
 
 
 def _meta_video_url(page_text: str):
@@ -130,15 +166,15 @@ def download_instagram_reel(url: str):
     print("Trying Instagram download with yt-dlp...")
     try:
         path = ytdlp_download(url, token)
-        print(f"Downloaded: {path}")
+        print(f"Downloaded video: {path}")
         return path
     except Exception as first_error:
-        print(f"yt-dlp could not download it: {first_error}")
+        print(f"yt-dlp could not produce a complete video: {first_error}")
 
     print("Trying Instagram public-page fallback...")
     try:
         path = public_page_download(url, token)
-        print(f"Downloaded: {path}")
+        print(f"Downloaded video: {path}")
         return path
     except Exception as second_error:
         raise RuntimeError(
@@ -155,7 +191,7 @@ def main():
     path = download_instagram_reel(args.url)
     print("\nINSTAGRAM DOWNLOAD SUCCESS")
     print(f"Saved to: {path}")
-    print("Next: run python3 auto_watch.py to build the reaction Reel.")
+    print("Next: run python auto_watch.py to build the reaction Reel.")
 
 
 if __name__ == "__main__":
