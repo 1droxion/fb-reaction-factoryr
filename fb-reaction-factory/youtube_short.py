@@ -8,7 +8,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 ROOT = Path(__file__).resolve().parent
-YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
+YOUTUBE_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+]
 
 
 def _token_info():
@@ -36,7 +39,7 @@ def _token_info():
 
 
 def _credentials():
-    creds = Credentials.from_authorized_user_info(_token_info(), [YOUTUBE_SCOPE])
+    creds = Credentials.from_authorized_user_info(_token_info(), YOUTUBE_SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
     if not creds.valid:
@@ -45,13 +48,10 @@ def _credentials():
 
 
 def _connected_channel(youtube):
-    try:
-        response = youtube.channels().list(part="snippet", mine=True).execute()
-        items = response.get("items") or []
-        if items:
-            return items[0].get("snippet", {}).get("title")
-    except Exception:
-        pass
+    response = youtube.channels().list(part="snippet", mine=True).execute()
+    items = response.get("items") or []
+    if items:
+        return items[0].get("snippet", {}).get("title")
     return None
 
 
@@ -72,7 +72,7 @@ def publish_short(video_path, title, description, tags=None, privacy="public"):
         value = str(tag).strip().lstrip("#")
         if value and value.lower() not in {x.lower() for x in clean_tags}:
             clean_tags.append(value[:30])
-    if "Shorts".lower() not in {x.lower() for x in clean_tags}:
+    if "shorts" not in {x.lower() for x in clean_tags}:
         clean_tags.append("Shorts")
 
     youtube = build("youtube", "v3", credentials=_credentials(), cache_discovery=False)
