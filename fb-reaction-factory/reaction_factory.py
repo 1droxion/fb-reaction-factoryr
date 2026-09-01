@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
+import imageio_ffmpeg
+
 ROOT = Path(__file__).resolve().parent
 REACTIONS_DIR = ROOT / "reactions"
 SOURCES_DIR = ROOT / "sources"
@@ -22,6 +24,11 @@ QUEUE_FILE = DATA_DIR / "queue.json"
 
 for d in (REACTIONS_DIR, SOURCES_DIR, OUTPUT_DIR, DATA_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+
+def ffmpeg_exe():
+    """Return the bundled imageio-ffmpeg executable so Windows needs no system FFmpeg install."""
+    return imageio_ffmpeg.get_ffmpeg_exe()
 
 
 def load_json(path, default):
@@ -40,16 +47,23 @@ def save_json(path, value):
 
 
 def run(cmd):
+    cmd = list(cmd)
+    if cmd and str(cmd[0]).lower() in {"ffmpeg", "ffmpeg.exe"}:
+        cmd[0] = ffmpeg_exe()
     print("$", " ".join(str(x) for x in cmd))
     subprocess.run(cmd, check=True)
 
 
 def ffprobe_duration(path):
-    p = subprocess.run([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(path)
-    ], capture_output=True, text=True, check=True)
-    return float(p.stdout.strip())
+    """Get media duration with the bundled FFmpeg package; no separate ffprobe binary required."""
+    try:
+        _frames, seconds = imageio_ffmpeg.count_frames_and_secs(str(path))
+        seconds = float(seconds)
+        if seconds <= 0:
+            raise ValueError("duration was zero")
+        return seconds
+    except Exception as exc:
+        raise RuntimeError(f"Could not read video duration for {path}: {exc}") from exc
 
 
 def ingest_source(source):
@@ -63,11 +77,24 @@ def ingest_source(source):
         ytdlp = shutil.which("yt-dlp")
         if not ytdlp:
             raise RuntimeError(
-                "URL ingest needs yt-dlp. Install it first with: python3 -m pip install yt-dlp"
+                "URL ingest needs yt-dlp. Install it first with: python -m pip install yt-dlp"
             )
         target_tpl = str(SOURCES_DIR / f"{uuid.uuid4().hex[:10]}.%(ext)s")
-        run([ytdlp, "--no-playlist", "-f", "bv*+ba/b", "--merge-output-format", "mp4", "-o", target_tpl, source])
-        candidates = sorted(SOURCES_DIR.glob(Path(target_tpl).name.replace(".%(ext)s", ".*")), key=lambda p: p.stat().st_mtime, reverse=True)
+        ffmpeg_dir = str(Path(ffmpeg_exe()).parent)
+        run([
+            ytdlp,
+            "--no-playlist",
+            "--ffmpeg-location", ffmpeg_dir,
+            "-f", "bv*+ba/b",
+            "--merge-output-format", "mp4",
+            "-o", target_tpl,
+            source,
+        ])
+        candidates = sorted(
+            SOURCES_DIR.glob(Path(target_tpl).name.replace(".%(ext)s", ".*")),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
         if not candidates:
             raise RuntimeError("Download completed but no source file was found.")
         return candidates[0]
@@ -131,7 +158,7 @@ def compose(source, reaction, output, max_seconds=60):
     )
 
     cmd = [
-        "ffmpeg", "-y",
+        ffmpeg_exe(), "-y",
         "-stream_loop", "-1", "-i", str(reaction),
         "-i", str(source),
         "-t", f"{duration:.3f}",
