@@ -3,6 +3,11 @@ from pathlib import Path
 
 import requests
 
+DEFAULT_TVMIND_DESCRIPTION = (
+    "Follow for more TVMind USA\n\n"
+    "#Explore #FacebookReel #ReelsViral #TVMindUSA"
+)
+
 
 def _config():
     page_id = os.getenv("META_PAGE_ID", "").strip()
@@ -48,7 +53,6 @@ def _resolve_page_token(page_id, token, version):
     """Return a Page access token when given either a Page token or System User token."""
     endpoint = f"https://graph.facebook.com/{version}/{page_id}"
 
-    # Preferred path for a permanent Business System User token.
     response = requests.get(
         endpoint,
         params={
@@ -66,8 +70,6 @@ def _resolve_page_token(page_id, token, version):
         if page_token:
             return page_token
 
-    # Compatibility fallback: System User /me/accounts can expose assigned Pages
-    # and their Page-scoped access tokens.
     accounts = requests.get(
         f"https://graph.facebook.com/{version}/me/accounts",
         params={
@@ -88,15 +90,13 @@ def _resolve_page_token(page_id, token, version):
                 if page_token:
                     return page_token
 
-    # If the supplied credential already is a Page token, use it directly.
-    # If it is a misconfigured System User token, Meta's publish error below will
-    # still provide the authoritative permission error.
     return token
 
 
-def publish_reel(video_path, description, state="PUBLISHED"):
+def publish_reel(video_path, description="", state="PUBLISHED"):
     page_id, supplied_token, version = _config()
     token = _resolve_page_token(page_id, supplied_token, version)
+    description = (description or "").strip() or DEFAULT_TVMIND_DESCRIPTION
 
     video_path = Path(video_path)
     if not video_path.exists():
