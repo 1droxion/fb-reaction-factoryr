@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string, request, send_from_directory
+from werkzeug.utils import secure_filename
 
 from auto_pipeline import download_url
 from facebook import publish_reel as publish_facebook
@@ -13,14 +14,17 @@ from instagram import publish_reel as publish_instagram
 from instagram_download import download_instagram_reel, is_instagram_url
 from metadata import generate_metadata
 from prepare_reel import write_package
-from reaction_factory import ffprobe_duration, make_reel
+from reaction_factory import REACTIONS_FILE, add_reaction, ffprobe_duration, load_json, make_reel
 from youtube_short import publish_short
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "output"
 INBOX = ROOT / "sources" / "approved_inbox"
 ENV_FILE = ROOT / ".env"
+REACTION_UPLOADS = ROOT / "data" / "reaction_uploads"
+REACTION_UPLOADS.mkdir(parents=True, exist_ok=True)
 MIN_SOURCE_SECONDS = 4.0
+ALLOWED_REACTION_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 
 app = Flask(__name__)
 JOB_LOCK = threading.Lock()
@@ -45,6 +49,10 @@ def load_env_file():
             continue
         key, value = line.split("=", 1)
         os.environ[key.strip()] = value.strip()
+
+
+def reaction_count():
+    return len(load_json(REACTIONS_FILE, []))
 
 
 def clean_caption_seed(source):
@@ -105,10 +113,9 @@ def process_job(job_id, url, rights_ok, post_instagram, post_youtube, post_faceb
         post_text = ""
 
         if post_instagram or post_youtube:
-            try:
-                duration = ffprobe_duration(source)
-            except FileNotFoundError as exc:
-                raise RuntimeError("Reaction editing needs FFmpeg/ffprobe installed on this computer.") from exc
+            if reaction_count() < 1:
+                raise RuntimeError("No reaction clips yet. Use Add Reaction Clips above, choose your reaction videos, then try again.")
+            duration = ffprobe_duration(source)
             if duration < MIN_SOURCE_SECONDS:
                 raise RuntimeError(f"Source is only {duration:.1f}s. Need at least 4s.")
 
@@ -184,13 +191,14 @@ def process_job(job_id, url, rights_ok, post_instagram, post_youtube, post_faceb
 DASHBOARD_HTML = r'''<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reaction Factory</title>
 <style>
-:root{--bg:#070a0f;--panel:#101722;--line:#263142;--text:#f6f8fb;--muted:#8d99aa;--accent:#6d5dfc;--good:#2dd881;--bad:#ff5d73}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}.wrap{max-width:1050px;margin:auto;padding:34px 18px}.brand{font-size:30px;font-weight:900}.sub{color:var(--muted);margin:6px 0 22px}.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:20px}.destinations{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.dest{border:1px solid var(--line);border-radius:15px;padding:16px;background:#0a0f17}.dest label{display:flex;gap:10px;align-items:flex-start;cursor:pointer}.dest input{margin-top:4px;transform:scale(1.2)}.dest strong{display:block;font-size:18px}.dest span{display:block;color:var(--muted);font-size:12px;line-height:1.5;margin-top:5px}.badge{display:inline-block!important;background:#171f2b;border-radius:999px;padding:5px 8px;font-weight:800;margin-top:9px!important}.row{display:flex;gap:10px;margin-top:16px}.url{flex:1;background:#070b11;border:1px solid var(--line);border-radius:13px;padding:15px;color:#fff;font-size:15px}button{border:0;border-radius:13px;background:var(--accent);color:#fff;padding:0 25px;font-weight:800;min-height:50px;cursor:pointer}.opts{display:flex;gap:10px;margin-top:12px;align-items:center}.opts select{background:#070b11;color:white;border:1px solid var(--line);border-radius:10px;padding:10px}.rights,.notice{margin-top:12px;font-size:13px;color:#c7cfdb}.notice{background:#0a0f17;border:1px solid var(--line);padding:11px;border-radius:12px;color:#aab4c2}.pipe{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:18px}.step{border:1px solid var(--line);border-radius:13px;padding:12px;background:#0a0f17;min-height:78px}.step small{display:block;color:var(--muted);margin-top:4px}.step.running{border-color:var(--accent)}.step.done{border-color:var(--good)}.step.skipped{opacity:.55;border-style:dashed}.step.error{border-color:var(--bad)}.status,.result{margin-top:14px;border:1px solid var(--line);background:#090e15;border-radius:13px;padding:14px}.track{height:7px;background:#18202c;border-radius:99px;margin-top:10px;overflow:hidden}.bar{height:100%;background:var(--accent);width:0}.error{display:none;color:#ffd4da;margin-top:9px}.result{display:none}.actions{display:flex;gap:8px;flex-wrap:wrap}.link{display:inline-block;padding:9px 12px;border-radius:10px;background:#1a2331;color:#fff;text-decoration:none}.summary{color:#cbd2dc;font-size:13px;margin-top:10px}.channel{margin-top:8px;color:#aab4c2;font-size:12px}@media(max-width:800px){.destinations{grid-template-columns:1fr}.pipe{grid-template-columns:1fr 1fr}.row,.opts{flex-direction:column}.url,button,.opts select{width:100%}}
+:root{--bg:#070a0f;--panel:#101722;--line:#263142;--text:#f6f8fb;--muted:#8d99aa;--accent:#6d5dfc;--good:#2dd881;--bad:#ff5d73}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}.wrap{max-width:1050px;margin:auto;padding:34px 18px}.brand{font-size:30px;font-weight:900}.sub{color:var(--muted);margin:6px 0 22px}.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:20px}.destinations{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.dest{border:1px solid var(--line);border-radius:15px;padding:16px;background:#0a0f17}.dest label{display:flex;gap:10px;align-items:flex-start;cursor:pointer}.dest input{margin-top:4px;transform:scale(1.2)}.dest strong{display:block;font-size:18px}.dest span{display:block;color:var(--muted);font-size:12px;line-height:1.5;margin-top:5px}.badge{display:inline-block!important;background:#171f2b;border-radius:999px;padding:5px 8px;font-weight:800;margin-top:9px!important}.row{display:flex;gap:10px;margin-top:16px}.url{flex:1;background:#070b11;border:1px solid var(--line);border-radius:13px;padding:15px;color:#fff;font-size:15px}button{border:0;border-radius:13px;background:var(--accent);color:#fff;padding:0 25px;font-weight:800;min-height:50px;cursor:pointer}.opts{display:flex;gap:10px;margin-top:12px;align-items:center}.opts select{background:#070b11;color:white;border:1px solid var(--line);border-radius:10px;padding:10px}.rights,.notice{margin-top:12px;font-size:13px;color:#c7cfdb}.notice{background:#0a0f17;border:1px solid var(--line);padding:11px;border-radius:12px;color:#aab4c2}.reaction-library{margin-top:14px;border:1px solid var(--line);background:#0a0f17;border-radius:13px;padding:13px;display:flex;align-items:center;justify-content:space-between;gap:12px}.reaction-library b{display:block}.reaction-library span{display:block;color:var(--muted);font-size:12px;margin-top:4px}.reaction-library button{min-height:40px;padding:0 15px}.pipe{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:18px}.step{border:1px solid var(--line);border-radius:13px;padding:12px;background:#0a0f17;min-height:78px}.step small{display:block;color:var(--muted);margin-top:4px}.step.running{border-color:var(--accent)}.step.done{border-color:var(--good)}.step.skipped{opacity:.55;border-style:dashed}.step.error{border-color:var(--bad)}.status,.result{margin-top:14px;border:1px solid var(--line);background:#090e15;border-radius:13px;padding:14px}.track{height:7px;background:#18202c;border-radius:99px;margin-top:10px;overflow:hidden}.bar{height:100%;background:var(--accent);width:0}.error{display:none;color:#ffd4da;margin-top:9px}.result{display:none}.actions{display:flex;gap:8px;flex-wrap:wrap}.link{display:inline-block;padding:9px 12px;border-radius:10px;background:#1a2331;color:#fff;text-decoration:none}.summary{color:#cbd2dc;font-size:13px;margin-top:10px}.channel{margin-top:8px;color:#aab4c2;font-size:12px}@media(max-width:800px){.destinations{grid-template-columns:1fr}.pipe{grid-template-columns:1fr 1fr}.row,.opts,.reaction-library{flex-direction:column;align-items:stretch}.url,button,.opts select{width:100%}}
 </style></head><body><div class="wrap"><div class="brand">Reaction Factory</div><div class="sub">Paste one URL. Edit once. Publish where you choose.</div><div class="card">
 <div class="destinations">
 <div class="dest"><label><input id="ig" type="checkbox" checked><div><strong>Instagram Reaction</strong><span>Uses the reaction short.</span><span class="badge">REACTION ON</span></div></label></div>
 <div class="dest"><label><input id="yt" type="checkbox"><div><strong>YouTube Shorts</strong><span>Posts the exact same reaction short used for Instagram.</span><span class="badge">SAME EDIT</span></div></label></div>
 <div class="dest"><label><input id="fb" type="checkbox"><div><strong>TV Mind USA Direct</strong><span>Posts the original source to Facebook with no reaction edit.</span><span class="badge">ORIGINAL · NO EDIT</span></div></label></div>
 </div>
+<div class="reaction-library"><div><b>Reaction Clip Library</b><span id="reactionStatus">Checking reaction clips...</span></div><div><input id="reactionFiles" type="file" accept="video/*" multiple style="display:none"><button type="button" onclick="document.getElementById('reactionFiles').click()">Add Reaction Clips</button></div></div>
 <div class="row"><input id="url" class="url" placeholder="Paste Instagram / Facebook / YouTube / Google Drive URL"><button id="start" onclick="startJob()">Start</button></div>
 <div class="opts"><select id="privacy"><option value="public">YouTube: Public</option><option value="unlisted">YouTube: Unlisted</option><option value="private">YouTube: Private</option></select></div>
 <div class="rights"><label><input id="rights" type="checkbox"> I confirm I own this source or have permission/license to reuse it.</label></div>
@@ -201,9 +209,13 @@ DASHBOARD_HTML = r'''<!doctype html>
 </div></div>
 <script>
 const steps=['download','edit','caption','publish'];let timer=null;function paint(n,s){document.getElementById('s-'+n).className='step '+(s||'waiting')}
+async function refreshReactions(){try{const r=await fetch('/api/reactions'),d=await r.json();document.getElementById('reactionStatus').textContent=d.count?`${d.count} reaction clip${d.count===1?'':'s'} ready. Add more anytime.`:'No reaction clips yet. Add 5–10 clips once.'}catch(e){document.getElementById('reactionStatus').textContent='Could not read reaction library.'}}
+async function uploadReactions(){const input=document.getElementById('reactionFiles');if(!input.files.length)return;const fd=new FormData();for(const file of input.files)fd.append('files',file);document.getElementById('reactionStatus').textContent='Adding reaction clips...';const r=await fetch('/api/reactions/upload',{method:'POST',body:fd}),d=await r.json();if(!r.ok){alert(d.error||'Could not add reaction clips');}else{document.getElementById('reactionStatus').textContent=`${d.count} reaction clips ready.`;}input.value=''}
+document.getElementById('reactionFiles').addEventListener('change',uploadReactions);
 async function startJob(){const url=document.getElementById('url').value.trim();if(!url)return alert('Paste a URL first.');if(!document.getElementById('rights').checked)return alert('Confirm reuse rights first.');const payload={url,rights_ok:true,instagram:document.getElementById('ig').checked,youtube:document.getElementById('yt').checked,facebook:document.getElementById('fb').checked,youtube_privacy:document.getElementById('privacy').value};if(!payload.instagram&&!payload.youtube&&!payload.facebook)return alert('Choose at least one destination.');document.getElementById('start').disabled=true;document.getElementById('result').style.display='none';document.getElementById('error').style.display='none';const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json();if(!r.ok){document.getElementById('start').disabled=false;return alert(d.error||'Could not start')}poll();if(timer)clearInterval(timer);timer=setInterval(poll,1000)}
 async function poll(){const r=await fetch('/api/status'),d=await r.json();document.getElementById('msg').textContent=d.message||'';document.getElementById('pct').textContent=(d.progress||0)+'%';document.getElementById('bar').style.width=(d.progress||0)+'%';steps.forEach(n=>paint(n,d.steps[n]));if(d.state==='error'){document.getElementById('error').style.display='block';document.getElementById('error').textContent=d.error||'Unknown error';document.getElementById('start').disabled=false;if(timer)clearInterval(timer)}if(d.state==='done'){document.getElementById('start').disabled=false;if(timer)clearInterval(timer);show(d.result)}}
-function show(r){if(!r)return;document.getElementById('result').style.display='block';document.getElementById('summary').textContent=r.summary||'';const ig=document.getElementById('iglink'),yt=document.getElementById('ytlink'),v=document.getElementById('video');if(r.instagram_permalink){ig.href=r.instagram_permalink;ig.style.display='inline-block'}else ig.style.display='none';if(r.youtube_url){yt.href=r.youtube_url;yt.style.display='inline-block'}else yt.style.display='none';if(r.reaction_video_url){v.href=r.reaction_video_url;v.style.display='inline-block'}else v.style.display='none';document.getElementById('channel').textContent=r.youtube_channel?'YouTube channel: '+r.youtube_channel:''}poll();
+function show(r){if(!r)return;document.getElementById('result').style.display='block';document.getElementById('summary').textContent=r.summary||'';const ig=document.getElementById('iglink'),yt=document.getElementById('ytlink'),v=document.getElementById('video');if(r.instagram_permalink){ig.href=r.instagram_permalink;ig.style.display='inline-block'}else ig.style.display='none';if(r.youtube_url){yt.href=r.youtube_url;yt.style.display='inline-block'}else yt.style.display='none';if(r.reaction_video_url){v.href=r.reaction_video_url;v.style.display='inline-block'}else v.style.display='none';document.getElementById('channel').textContent=r.youtube_channel?'YouTube channel: '+r.youtube_channel:''}
+refreshReactions();poll();
 </script></body></html>'''
 
 
@@ -215,6 +227,36 @@ def home():
 @app.get("/api/status")
 def api_status():
     return jsonify(snapshot())
+
+
+@app.get("/api/reactions")
+def api_reactions():
+    return jsonify({"count": reaction_count()})
+
+
+@app.post("/api/reactions/upload")
+def api_reactions_upload():
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "Choose one or more reaction video files."}), 400
+
+    added = 0
+    for uploaded in files:
+        filename = secure_filename(uploaded.filename or "")
+        suffix = Path(filename).suffix.lower()
+        if not filename or suffix not in ALLOWED_REACTION_EXTS:
+            continue
+        temp = REACTION_UPLOADS / f"{uuid.uuid4().hex[:10]}_{filename}"
+        uploaded.save(temp)
+        try:
+            add_reaction(str(temp), label="funny", notes="Added from Reaction Factory dashboard")
+            added += 1
+        finally:
+            temp.unlink(missing_ok=True)
+
+    if added < 1:
+        return jsonify({"error": "No supported video files were added. Use MP4, MOV, M4V, WEBM, AVI, or MKV."}), 400
+    return jsonify({"ok": True, "added": added, "count": reaction_count()})
 
 
 @app.post("/api/start")
