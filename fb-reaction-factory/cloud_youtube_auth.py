@@ -55,14 +55,36 @@ def find_local_token():
     )
 
 
+def _prepare_cloud_auth():
+    """Reuse whichever working Meta credential the local Reaction Factory already has."""
+    current = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+    if current:
+        return
+
+    fallback = (
+        os.getenv("META_SYSTEM_USER_ACCESS_TOKEN", "").strip()
+        or os.getenv("META_USER_ACCESS_TOKEN", "").strip()
+    )
+    if fallback:
+        os.environ["META_PAGE_ACCESS_TOKEN"] = fallback
+        return
+
+    raise RuntimeError(
+        "No local Meta credential found for secure Supabase upload. "
+        "Expected META_SYSTEM_USER_ACCESS_TOKEN, META_PAGE_ACCESS_TOKEN, or META_USER_ACCESS_TOKEN in .env."
+    )
+
+
 def push_youtube_token():
     source = find_local_token()
+    _prepare_cloud_auth()
     upload_file(source, REMOTE_TOKEN)
     print("YouTube cloud authorization saved securely in private Supabase storage.")
     print("Token contents were not added to GitHub.")
 
 
 def pull_youtube_token(required=False):
+    _prepare_cloud_auth()
     ok = download_file(REMOTE_TOKEN, LOCAL_TOKEN, required=required)
     if not ok:
         return False
