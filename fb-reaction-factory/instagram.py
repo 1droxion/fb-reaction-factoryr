@@ -5,16 +5,6 @@ from pathlib import Path
 import requests
 
 
-def _config():
-    ig_user_id = os.getenv("META_IG_USER_ID", "").strip()
-    page_token = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
-    user_token = os.getenv("META_USER_ACCESS_TOKEN", "").strip()
-    version = os.getenv("META_GRAPH_VERSION", "v26.0").strip()
-    if not ig_user_id or not (user_token or page_token):
-        raise RuntimeError("Set META_IG_USER_ID and a Meta User/Page access token first.")
-    return ig_user_id, user_token, page_token, version
-
-
 def _json(response, step="request"):
     try:
         data = response.json()
@@ -34,6 +24,89 @@ def _json(response, step="request"):
             detail += ")"
         raise RuntimeError(detail)
     return data
+
+
+def _resolve_page_token(page_id, token, version):
+    if not page_id or not token:
+        return ""
+    response = requests.get(
+        f"https://graph.facebook.com/{version}/{page_id}",
+        params={"fields": "id,name,access_token", "access_token": token},
+        timeout=60,
+    )
+    if not response.ok:
+        return ""
+    try:
+        data = response.json()
+    except Exception:
+        return ""
+    return str(data.get("access_token") or "").strip()
+
+
+def _discover_instagram_account(page_id, tokens, version):
+    if not page_id:
+        return "", ""
+
+    fields = "instagram_business_account{id,username},connected_instagram_account{id,username}"
+    errors = []
+    for label, token in tokens:
+        if not token:
+            continue
+        try:
+            response = requests.get(
+                f"https://graph.facebook.com/{version}/{page_id}",
+                params={"fields": fields, "access_token": token},
+                timeout=60,
+            )
+            data = _json(response, f"account discovery ({label} token)")
+            account = data.get("instagram_business_account") or data.get("connected_instagram_account") or {}
+            ig_id = str(account.get("id") or "").strip()
+            username = str(account.get("username") or "").strip()
+            if ig_id:
+                return ig_id, username
+        except Exception as exc:
+            errors.append(str(exc))
+
+    detail = " | ".join(errors[-3:]) if errors else "No connected Instagram professional account was returned by Meta."
+    raise RuntimeError(
+        "Could not find the Instagram account connected to this Facebook Page. "
+        "Make sure the Instagram professional account is linked to the Page. " + detail
+    )
+
+
+def _config():
+    version = os.getenv("META_GRAPH_VERSION", "v26.0").strip() or "v26.0"
+    page_id = os.getenv("META_PAGE_ID", "").strip()
+    ig_user_id = os.getenv("META_IG_USER_ID", "").strip()
+    page_token = os.getenv("META_PAGE_ACCESS_TOKEN", "").strip()
+    user_token = os.getenv("META_USER_ACCESS_TOKEN", "").strip()
+    system_token = os.getenv("META_SYSTEM_USER_ACCESS_TOKEN", "").strip()
+
+    if not page_token and system_token:
+        page_token = _resolve_page_token(page_id, system_token, version)
+
+    tokens = []
+    seen = set()
+    for label, token in (("user", user_token), ("page", page_token), ("system", system_token)):
+        if token and token not in seen:
+            tokens.append((label, token))
+            seen.add(token)
+
+    if not tokens:
+        raise RuntimeError(
+            "No Meta access token is available. Set META_SYSTEM_USER_ACCESS_TOKEN, "
+            "META_PAGE_ACCESS_TOKEN, or META_USER_ACCESS_TOKEN first."
+        )
+
+    username = ""
+    if not ig_user_id:
+        ig_user_id, username = _discover_instagram_account(page_id, tokens, version)
+        print(
+            "Instagram account discovered automatically: "
+            + (f"@{username} ({ig_user_id})" if username else ig_user_id)
+        )
+
+    return ig_user_id, tokens, version
 
 
 def _wait_for_container(container_id, token, version, timeout_seconds):
@@ -97,21 +170,12 @@ def _create_and_upload(video_path, caption, ig_user_id, token, version, token_la
 
 
 def publish_reel(video_path, caption, timeout_seconds=300):
-    ig_user_id, user_token, page_token, version = _config()
+    ig_user_id, candidates, version = _config()
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(video_path)
     if not video_path.is_file():
         raise RuntimeError(f"Not a video file: {video_path}")
-
-    # Meta's current local/resumable Instagram Reel sample uses the Facebook
-    # User Access Token for both container creation and the rupload binary POST.
-    # Keep the Page token as a compatibility fallback for existing setups.
-    candidates = []
-    if user_token:
-        candidates.append(("user", user_token))
-    if page_token and page_token != user_token:
-        candidates.append(("page", page_token))
 
     container_id = None
     active_token = None
