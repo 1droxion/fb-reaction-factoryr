@@ -4,6 +4,7 @@ import time
 
 from cloud_multiplatform import run_cloud_cycle
 from cloud_sync import load_env, pull_reactions, pull_state, push_state
+from cloud_youtube_auth import pull_youtube_token
 
 POLL_SECONDS = max(5, int(os.getenv("REACTION_FACTORY_POLL_SECONDS", "10")))
 MAX_RUNTIME_SECONDS = max(300, int(os.getenv("REACTION_FACTORY_MAX_RUNTIME_SECONDS", str(5 * 60 * 60 + 30 * 60))))
@@ -12,6 +13,14 @@ MAX_RUNTIME_SECONDS = max(300, int(os.getenv("REACTION_FACTORY_MAX_RUNTIME_SECON
 def main():
     load_env()
     pull_reactions()
+
+    try:
+        if pull_youtube_token(required=False):
+            print("YouTube cloud authorization is ready.")
+        else:
+            print("YouTube cloud authorization is not uploaded yet; Instagram/Facebook can still run.")
+    except Exception as exc:
+        print(f"YouTube cloud authorization restore failed: {exc}")
 
     started = time.monotonic()
     print("Reaction Factory multi-platform LIVE worker is online.")
