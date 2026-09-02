@@ -24,9 +24,13 @@ on:
     - cron: '0 */5 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 concurrency:
   group: reaction-factory-live-worker
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   live-worker:
@@ -64,13 +68,26 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
       - name: Install Python requirements
         run: python -m pip install -r requirements.txt
 
-      - name: Validate Meta credentials
+      - name: Prepare FFmpeg
+        shell: bash
+        run: |
+          FFMPEG_BIN="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
+          sudo ln -sf "$FFMPEG_BIN" /usr/local/bin/ffmpeg
+          ffmpeg -version | head -n 1
+
+      - name: Get private cloud worker identity
+        shell: bash
+        run: |
+          TOKEN_JSON="$(curl -fsSL -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=reaction-factory-cloud")"
+          TOKEN="$(printf '%s' "$TOKEN_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          echo "::add-mask::$TOKEN"
+          echo "REACTION_FACTORY_CLOUD_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Check Meta credentials
+        continue-on-error: true
         run: python meta_preflight.py
 
       - name: Run continuous dashboard worker
