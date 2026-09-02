@@ -13,6 +13,7 @@ on:
       - 'fb-reaction-factory/cloud_youtube_auth.py'
       - 'fb-reaction-factory/youtube_download.py'
       - 'fb-reaction-factory/requirements.txt'
+      - 'fb-reaction-factory/meta_preflight.py'
       - 'fb-reaction-factory/instagram.py'
       - 'fb-reaction-factory/facebook.py'
       - 'fb-reaction-factory/youtube_short.py'
@@ -47,6 +48,7 @@ jobs:
       META_IG_USERNAME: 'dhruv6x8'
       META_GRAPH_VERSION: v26.0
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+      META_SYSTEM_USER_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
       META_PAGE_ACCESS_TOKEN_TVMIND: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
       META_PAGE_ACCESS_TOKEN_KIDS: ${{ secrets.META_PAGE_ACCESS_TOKEN_KIDS }}
       META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
