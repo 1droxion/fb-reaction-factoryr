@@ -35,15 +35,12 @@ def normalize_options(raw):
     }
 
 
-def is_instant_old_dashboard_job(options):
-    lane = options.get("lane")
-    if options.get("youtube"):
-        return False
-    if lane == "personal" and options.get("instagram") and not options.get("facebook"):
-        return True
-    if lane == "tvmind" and options.get("facebook") and not options.get("instagram"):
-        return True
-    return False
+def is_personal_reaction_job(options):
+    return (
+        options.get("lane") == "personal"
+        and not options.get("facebook")
+        and bool(options.get("instagram") or options.get("youtube"))
+    )
 
 
 def next_cloud_url(state):
@@ -121,8 +118,8 @@ def process_cloud_job(url, options, progress_sync=None):
         raise RuntimeError("Choose at least one destination.")
 
     require_explicit_approval(url)
-    instant_old = is_instant_old_dashboard_job(options)
-    reaction_needed = instant_old or options["instagram"] or options["youtube"]
+    personal_reaction = is_personal_reaction_job(options)
+    reaction_needed = bool(options["instagram"] or options["youtube"])
 
     _progress(url, "downloading", "Downloading source now...", progress_sync)
     source_context = source_context_from_url(url)
@@ -138,14 +135,14 @@ def process_cloud_job(url, options, progress_sync=None):
         if duration < MIN_SOURCE_SECONDS or duration > MAX_SOURCE_SECONDS:
             raise RuntimeError(f"Source is {duration:.1f}s. Instant reaction mode needs {MIN_SOURCE_SECONDS:.0f}-{MAX_SOURCE_SECONDS:.0f}s.")
         caption_seed = source_context or clean_caption_seed(source)
-        _progress(url, "editing", "Creating 30/70 reaction edit with WAIT FOR END 😂...", progress_sync)
+        _progress(url, "editing", "Creating 30/70 reaction edit with Droxion banner...", progress_sync)
         reaction_video, reaction_used = make_reel(
             str(source), caption=caption_seed, reaction="auto", rights_ok=True,
-            middle_banner=instant_old,
+            middle_banner=personal_reaction,
         )
         reaction_video = Path(reaction_video)
         _progress(url, "edited", "30/70 reaction edit ready.", progress_sync, status="done")
-        _progress(url, "metadata", "Creating caption and tags...", progress_sync)
+        _progress(url, "metadata", "Creating title, caption and tags...", progress_sync)
         metadata = generate_metadata(caption_seed)
         text_path, json_path, post_text = write_package(
             reaction_video,
@@ -158,11 +155,11 @@ def process_cloud_job(url, options, progress_sync=None):
                 "source_looped": False,
                 "rights_gate": "approved_queue",
                 "cloud_multi_platform": True,
-                "instant_old_dashboard": instant_old,
+                "personal_reaction": personal_reaction,
             },
         )
         post_text = add_source_disclosure(post_text, text_path, json_path, url)
-        _progress(url, "metadata_done", "Metadata ready.", progress_sync, status="done", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
+        _progress(url, "metadata_done", "Title, caption and tags ready.", progress_sync, status="done", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
     else:
         _progress(url, "metadata_done", "Direct post uses the original video.", progress_sync, status="done")
 
@@ -197,6 +194,7 @@ def process_cloud_job(url, options, progress_sync=None):
                     description=((metadata or {}).get("description") or "") + "\n\n" + " ".join(hashtags),
                     tags=hashtags,
                     privacy=options["youtube_privacy"],
+                    profile="personal",
                 )
                 results["youtube"] = result
                 _destination_success(url, "youtube", result, progress_sync)
@@ -209,11 +207,9 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["facebook"] = prior
         else:
-            target_video = reaction_video if instant_old else source
-            target_text = post_text if instant_old else ""
-            _progress(url, "publishing_facebook", "Posting edited Reel to TV Mind now..." if instant_old else "Publishing video to Facebook...", progress_sync)
+            _progress(url, "publishing_facebook", "Publishing original video to TV Mind USA...", progress_sync)
             try:
-                result = publish_facebook(target_video, target_text, profile="tvmind" if options.get("lane") == "tvmind" else None)
+                result = publish_facebook(source, "", profile="tvmind" if options.get("lane") in {"tvmind", "tvmind_direct"} else None)
                 results["facebook"] = result
                 _destination_success(url, "facebook", result, progress_sync)
             except Exception as exc:
@@ -271,7 +267,7 @@ def run_cloud_cycle(progress_sync=None):
     if options["youtube"]:
         completed.append("YouTube Shorts")
     if options["facebook"]:
-        completed.append("TV Mind")
+        completed.append("TV Mind USA")
 
     state = load_state()
     state.setdefault("processed", {})[url] = "success"
