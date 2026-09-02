@@ -154,20 +154,19 @@ def compose(source, reaction, output, max_seconds=60, middle_banner=False):
     )
 
     if middle_banner:
-        # Compact branded promo centered on the 30/70 seam.
-        # It stays deliberately small so it does not cover the reaction or source video.
+        # Small Droxion promo centered on the 30/70 seam without covering the video.
         filter_complex += (
             ";[stack]"
-            "drawbox=x=110:y=535:w=860:h=82:color=black@0.94:t=fill,"
-            "drawbox=x=110:y=535:w=860:h=82:color=red@1.0:t=4,"
-            "drawbox=x=126:y=549:w=54:h=54:color=0x5b45ea@1.0:t=fill,"
-            "drawtext=text='D':fontcolor=white:fontsize=38:x=140:y=555:borderw=1:bordercolor=black,"
-            "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=25:x=198:y=542:borderw=1:bordercolor=black,"
-            "drawtext=text='DROXION':fontcolor=white:fontsize=39:x=198:y=566:borderw=1:bordercolor=black,"
-            "drawbox=x=712:y=550:w=238:h=52:color=black@1.0:t=fill,"
-            "drawbox=x=712:y=550:w=238:h=52:color=white@0.85:t=2,"
-            "drawtext=text='Download on the':fontcolor=white:fontsize=14:x=731:y=553,"
-            "drawtext=text='App Store':fontcolor=white:fontsize=24:x=755:y=570[v]"
+            "drawbox=x=180:y=548:w=720:h=56:color=black@0.94:t=fill,"
+            "drawbox=x=180:y=548:w=720:h=56:color=red@1.0:t=3,"
+            "drawbox=x=194:y=557:w=38:h=38:color=0x5b45ea@1.0:t=fill,"
+            "drawtext=text='D':fontcolor=white:fontsize=27:x=204:y=561:borderw=1:bordercolor=black,"
+            "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=17:x=244:y=551:borderw=1:bordercolor=black,"
+            "drawtext=text='DROXION':fontcolor=white:fontsize=28:x=244:y=570:borderw=1:bordercolor=black,"
+            "drawbox=x=748:y=557:w=132:h=38:color=black@1.0:t=fill,"
+            "drawbox=x=748:y=557:w=132:h=38:color=white@0.85:t=1,"
+            "drawtext=text='Download on the':fontcolor=white:fontsize=9:x=758:y=559,"
+            "drawtext=text='App Store':fontcolor=white:fontsize=16:x=770:y=574[v]"
         )
     else:
         filter_complex += ";[stack]null[v]"
