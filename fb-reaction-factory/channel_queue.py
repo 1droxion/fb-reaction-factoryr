@@ -78,12 +78,18 @@ def normalize_lane_options(raw):
     privacy = str(raw.get("youtube_privacy") or "public").strip().lower()
     if privacy not in {"public", "unlisted", "private"}:
         privacy = "public"
+    overlay_position = str(raw.get("overlay_position") or "none").strip().lower()
+    if overlay_position not in {"none", "top", "middle", "bottom"}:
+        overlay_position = "none"
+    overlay_text = str(raw.get("overlay_text") or "").strip()[:80]
     cfg.update({
         "lane": lane,
         "youtube_privacy": privacy,
         "instagram": bool(raw.get("instagram", cfg["instagram"])),
         "youtube": bool(raw.get("youtube", cfg["youtube"])),
         "facebook": bool(raw.get("facebook", cfg["facebook"])),
+        "overlay_position": overlay_position,
+        "overlay_text": overlay_text,
     })
     return cfg
 
@@ -198,16 +204,9 @@ def _build_plan(url, cfg, source, duration, progress_sync=None):
     candidates = _candidate_segments(duration, cfg["clip_seconds"])
     if not candidates:
         raise RuntimeError("The source video is too short to create clips.")
-
-    _save_progress(
-        url, cfg["lane"], "analyzing",
-        f"Analyzing {len(candidates)} possible clips and ranking the strongest moments...",
-        progress_sync,
-        total_candidates=len(candidates),
-    )
+    _save_progress(url, cfg["lane"], "analyzing", f"Analyzing {len(candidates)} possible clips and ranking the strongest moments...", progress_sync, total_candidates=len(candidates))
     for item in candidates:
         item["score"] = _activity_score(source, item["start"], item["duration"], item["index"])
-
     candidates.sort(key=lambda x: (x["score"], -x["index"]), reverse=True)
     select_count = max(1, int(math.ceil(len(candidates) * float(cfg["selection_ratio"]))))
     selected = candidates[:select_count]
@@ -224,7 +223,6 @@ def _build_plan(url, cfg, source, duration, progress_sync=None):
             "results": {},
             "error": None,
         })
-
     state = load_state()
     plans = state.setdefault("clip_plans", {})
     plans[url] = {
@@ -237,6 +235,8 @@ def _build_plan(url, cfg, source, duration, progress_sync=None):
         "selected_count": len(clips),
         "created_at": now_iso(),
         "status": "scheduled",
+        "overlay_position": cfg.get("overlay_position", "none"),
+        "overlay_text": cfg.get("overlay_text", ""),
         "clips": clips,
     }
     state.setdefault("processed", {}).pop(url, None)
@@ -280,6 +280,49 @@ def _extract_clip(source, start, duration, lane, clip_index, vertical=False):
     return target
 
 
+def _overlay_label(cfg, clip):
+    raw = str(cfg.get("overlay_text") or "").strip()
+    if not raw:
+        return ""
+    if raw == "__AUTO_PART__":
+        return f"Part {clip.get('rank', 1)}"
+    return raw
+
+
+def _ffmpeg_escape_text(value):
+    return str(value).replace("\\", r"\\").replace(":", r"\:").replace("'", r"\'").replace("%", r"\%")
+
+
+def _apply_overlay(video, cfg, clip):
+    label = _overlay_label(cfg, clip)
+    position = str(cfg.get("overlay_position") or "none").lower()
+    if not label or position == "none":
+        return Path(video)
+    y_expr = {
+        "top": "h*0.10",
+        "middle": "(h-text_h)/2",
+        "bottom": "h-text_h-h*0.10",
+    }.get(position, "h*0.10")
+    font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    target = WORK / f"overlay_{cfg['lane']}_{clip.get('index', 0)}.mp4"
+    escaped = _ffmpeg_escape_text(label)
+    draw = (
+        f"drawtext=fontfile='{font}':text='{escaped}':fontcolor=white:fontsize=h*0.055:"
+        f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={y_expr}:"
+        "box=1:boxcolor=black@0.38:boxborderw=18"
+    )
+    cmd = [
+        _ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(video),
+        "-vf", draw,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-c:a", "copy", "-movflags", "+faststart", str(target),
+    ]
+    subprocess.run(cmd, check=True, timeout=900)
+    if not target.exists() or target.stat().st_size <= 0:
+        raise RuntimeError("Text overlay rendering failed.")
+    return target
+
+
 def _caption_seed(source, url, cfg, clip):
     base = source_context_from_url(url) or clean_caption_seed(source)
     if cfg["lane"] == "kids":
@@ -291,16 +334,10 @@ def _caption_seed(source, url, cfg, clip):
 
 def _publish_clip(url, cfg, plan, clip, source, progress_sync=None):
     lane = cfg["lane"]
-    _save_progress(
-        url, lane, "clipping",
-        f"Preparing {cfg['label']} clip #{clip['rank']}...",
-        progress_sync,
-        clip_rank=clip["rank"],
-        clip_index=clip["index"],
-    )
-
+    _save_progress(url, lane, "clipping", f"Preparing {cfg['label']} clip #{clip['rank']}...", progress_sync, clip_rank=clip["rank"], clip_index=clip["index"])
     raw_clip = _extract_clip(source, clip["start"], clip["duration"], lane, clip["index"], vertical=not cfg["reaction"])
     publish_video = raw_clip
+    overlay_video = None
     metadata = None
     post_text = ""
     try:
@@ -329,6 +366,11 @@ def _publish_clip(url, cfg, plan, clip, source, progress_sync=None):
             hashtags = " ".join(metadata.get("hashtags", []))
             post_text = f"{metadata.get('title','')}\n\n{metadata.get('description','')}\n\n{hashtags}".strip()
 
+        if cfg.get("overlay_text") and cfg.get("overlay_position") != "none":
+            _save_progress(url, lane, "overlay", f"Adding text to clip #{clip['rank']}...", progress_sync)
+            overlay_video = _apply_overlay(publish_video, cfg, clip)
+            publish_video = overlay_video
+
         results = {}
         failures = {}
         if cfg["instagram"]:
@@ -337,7 +379,6 @@ def _publish_clip(url, cfg, plan, clip, source, progress_sync=None):
                 results["instagram"] = publish_instagram(publish_video, post_text)
             except Exception as exc:
                 failures["Instagram"] = str(exc)
-
         if cfg["youtube"]:
             _save_progress(url, lane, "publishing_youtube", f"Posting {cfg['label']} clip #{clip['rank']} to YouTube...", progress_sync)
             try:
@@ -353,18 +394,12 @@ def _publish_clip(url, cfg, plan, clip, source, progress_sync=None):
                 )
             except Exception as exc:
                 failures["YouTube"] = str(exc)
-
         if cfg["facebook"]:
             _save_progress(url, lane, "publishing_facebook", f"Posting {cfg['label']} clip #{clip['rank']} to Facebook...", progress_sync)
             try:
-                results["facebook"] = publish_facebook(
-                    publish_video,
-                    post_text,
-                    profile=cfg["facebook_profile"],
-                )
+                results["facebook"] = publish_facebook(publish_video, post_text, profile=cfg["facebook_profile"])
             except Exception as exc:
                 failures["Facebook"] = str(exc)
-
         if failures:
             raise RuntimeError("; ".join(f"{k}: {v}" for k, v in failures.items()))
         return results
@@ -373,7 +408,12 @@ def _publish_clip(url, cfg, plan, clip, source, progress_sync=None):
             raw_clip.unlink(missing_ok=True)
         except Exception:
             pass
-        if publish_video != raw_clip:
+        if overlay_video is not None:
+            try:
+                Path(overlay_video).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if publish_video != raw_clip and overlay_video is None:
             try:
                 Path(publish_video).unlink(missing_ok=True)
             except Exception:
@@ -409,14 +449,12 @@ def _update_plan_after_post(url, clip_index, results, progress_sync=None):
     target["posted_at"] = now_iso()
     target["results"] = results or {}
     target["error"] = None
-
     clips = plan.get("clips") or []
     posted = sum(1 for c in clips if c.get("status") == "posted")
     remaining = sum(1 for c in clips if c.get("status") == "queued")
     errors = sum(1 for c in clips if c.get("status") == "error")
     next_times = [c.get("publish_at") for c in clips if c.get("status") == "queued" and c.get("publish_at")]
     next_publish_at = min(next_times) if next_times else None
-
     if remaining == 0:
         plan["status"] = "complete" if errors == 0 else "needs_attention"
         if errors == 0:
@@ -425,7 +463,6 @@ def _update_plan_after_post(url, clip_index, results, progress_sync=None):
             state["last_success"] = now_iso()
     else:
         plan["status"] = "scheduled"
-
     result_links = results or {}
     history_item = {
         "at": now_iso(),
@@ -482,10 +519,7 @@ def _mark_clip_error(url, clip_index, exc, progress_sync=None):
         "clip_index": clip_index,
     }
     history = state.setdefault("history", [])
-    history.insert(0, {
-        "at": now_iso(), "status": "failed", "url": url,
-        "lane": plan.get("lane"), "clip_index": clip_index, "error": str(exc),
-    })
+    history.insert(0, {"at": now_iso(), "status": "failed", "url": url, "lane": plan.get("lane"), "clip_index": clip_index, "error": str(exc)})
     del history[100:]
     save_state(state)
     if progress_sync:
@@ -497,7 +531,6 @@ def run_channel_cycle(url, raw_options, progress_sync=None):
     require_explicit_approval(url)
     state = load_state()
     plan = (state.get("clip_plans", {}) or {}).get(url)
-
     if not plan:
         try:
             _save_progress(url, cfg["lane"], "downloading", f"Downloading {cfg['label']} source for clip analysis...", progress_sync)
@@ -509,19 +542,14 @@ def run_channel_cycle(url, raw_options, progress_sync=None):
             state = load_state()
             state["last_error"] = str(exc)
             state.setdefault("failed", {})[url] = {"error": str(exc), "at": now_iso(), "skip": True}
-            state["current_progress"] = {
-                "url": url, "lane": cfg["lane"], "stage": "failed", "status": "error",
-                "detail": str(exc), "updated_at": now_iso(),
-            }
+            state["current_progress"] = {"url": url, "lane": cfg["lane"], "stage": "failed", "status": "error", "detail": str(exc), "updated_at": now_iso()}
             save_state(state)
             if progress_sync:
                 progress_sync()
             return "failed"
-
     clip = _due_clip(plan)
     if not clip:
         return "waiting"
-
     try:
         state = load_state()
         live_plan = (state.get("clip_plans", {}) or {}).get(url) or plan
@@ -532,7 +560,6 @@ def run_channel_cycle(url, raw_options, progress_sync=None):
         save_state(state)
         if progress_sync:
             progress_sync()
-
         _save_progress(url, cfg["lane"], "downloading", f"Downloading source for scheduled clip #{clip['rank']}...", progress_sync)
         source = Path(download_url(url))
         results = _publish_clip(url, cfg, live_plan, clip, source, progress_sync)
