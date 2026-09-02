@@ -199,24 +199,25 @@ def compose_tvmind(source, output):
     source_duration = ffprobe_duration(source)
     duration = float(source_duration)
 
-    # Exact 1080x1920 layout: top 192px (10%) is the Droxion ad,
-    # remaining 1728px (90%) is the original video.
+    # 1080x1920 TV Mind layout: top 640px is the Droxion promo (~33%),
+    # bottom 1280px is the original video (~67%).
     filter_complex = (
-        f"[0:v]scale=1080:1728:force_original_aspect_ratio=increase,"
-        f"crop=1080:1728,setsar=1,fps=30,"
+        f"[0:v]scale=1080:1280:force_original_aspect_ratio=increase,"
+        f"crop=1080:1280,setsar=1,fps=30,"
         f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[video];"
-        f"color=c=black:s=1080x192:r=30:d={duration:.3f}[top];"
+        f"color=c=0x030307:s=1080x640:r=30:d={duration:.3f}[top];"
         "[top]"
-        "drawbox=x=40:y=18:w=1000:h=156:color=black@1.0:t=fill,"
-        "drawbox=x=40:y=18:w=1000:h=156:color=red@1.0:t=4,"
-        "drawbox=x=70:y=48:w=96:h=96:color=0x5b45ea@1.0:t=fill,"
-        "drawtext=text='D':fontcolor=white:fontsize=68:x=97:y=59:borderw=2:bordercolor=black,"
-        "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=30:x=190:y=38:borderw=1:bordercolor=black,"
-        "drawtext=text='DROXION':fontcolor=white:fontsize=56:x=190:y=82:borderw=1:bordercolor=black,"
-        "drawbox=x=750:y=46:w=240:h=100:color=black@1.0:t=fill,"
-        "drawbox=x=750:y=46:w=240:h=100:color=white@0.90:t=2,"
-        "drawtext=text='Download on the':fontcolor=white:fontsize=17:x=775:y=57,"
-        "drawtext=text='App Store':fontcolor=white:fontsize=34:x=790:y=88[ad];"
+        "drawbox=x=46:y=56:w=988:h=528:color=0x090a10@1.0:t=fill,"
+        "drawbox=x=46:y=56:w=988:h=528:color=0xff3348@1.0:t=5,"
+        "drawbox=x=88:y=168:w=170:h=170:color=0x684dff@1.0:t=fill,"
+        "drawtext=text='D':fontcolor=white:fontsize=112:x=132:y=190:borderw=3:bordercolor=black,"
+        "drawtext=text='DOWNLOAD':fontcolor=0x66ff1a:fontsize=42:x=300:y=136:borderw=2:bordercolor=black,"
+        "drawtext=text='DROXION':fontcolor=white:fontsize=92:x=300:y=195:borderw=2:bordercolor=black,"
+        "drawtext=text='LIVE  |  CLIPS  |  EARN':fontcolor=0xc8c9d6:fontsize=31:x=300:y=315:borderw=1:bordercolor=black,"
+        "drawbox=x=700:y=402:w=284:h=116:color=black@1.0:t=fill,"
+        "drawbox=x=700:y=402:w=284:h=116:color=white@0.88:t=2,"
+        "drawtext=text='Download on the':fontcolor=white:fontsize=20:x=730:y=420,"
+        "drawtext=text='App Store':fontcolor=white:fontsize=42:x=748:y=456[ad];"
         "[ad][video]vstack=inputs=2[v]"
     )
 
@@ -262,7 +263,7 @@ def make_tvmind_reel(source, rights_ok=False):
     print(json.dumps({
         "output": str(out),
         "source": str(local_source),
-        "layout": "top_10_percent_droxion_ad_bottom_90_percent_original",
+        "layout": "top_33_percent_droxion_ad_bottom_67_percent_original",
     }, indent=2))
     return out
 
