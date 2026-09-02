@@ -160,19 +160,19 @@ def compose(source, reaction, output, max_seconds=60, middle_banner=False):
     )
 
     if middle_banner:
-        # Small Droxion promo centered on the 30/70 seam without covering the video.
+        # Medium Droxion promo centered on the 30/70 seam.
         filter_complex += (
             ";[stack]"
-            "drawbox=x=180:y=548:w=720:h=56:color=black@0.94:t=fill,"
-            "drawbox=x=180:y=548:w=720:h=56:color=red@1.0:t=3,"
-            "drawbox=x=194:y=557:w=38:h=38:color=0x5b45ea@1.0:t=fill,"
-            "drawtext=text='D':fontcolor=white:fontsize=27:x=204:y=561:borderw=1:bordercolor=black,"
-            "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=17:x=244:y=551:borderw=1:bordercolor=black,"
-            "drawtext=text='DROXION':fontcolor=white:fontsize=28:x=244:y=570:borderw=1:bordercolor=black,"
-            "drawbox=x=748:y=557:w=132:h=38:color=black@1.0:t=fill,"
-            "drawbox=x=748:y=557:w=132:h=38:color=white@0.85:t=1,"
-            "drawtext=text='Download on the':fontcolor=white:fontsize=9:x=758:y=559,"
-            "drawtext=text='App Store':fontcolor=white:fontsize=16:x=770:y=574[v]"
+            "drawbox=x=120:y=540:w=840:h=72:color=black@0.95:t=fill,"
+            "drawbox=x=120:y=540:w=840:h=72:color=red@1.0:t=4,"
+            "drawbox=x=140:y=551:w=50:h=50:color=0x5b45ea@1.0:t=fill,"
+            "drawtext=text='D':fontcolor=white:fontsize=34:x=155:y=558:borderw=1:bordercolor=black,"
+            "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=20:x=205:y=546:borderw=1:bordercolor=black,"
+            "drawtext=text='DROXION':fontcolor=white:fontsize=34:x=205:y=571:borderw=1:bordercolor=black,"
+            "drawbox=x=775:y=551:w=165:h=50:color=black@1.0:t=fill,"
+            "drawbox=x=775:y=551:w=165:h=50:color=white@0.85:t=1,"
+            "drawtext=text='Download on the':fontcolor=white:fontsize=11:x=788:y=554,"
+            "drawtext=text='App Store':fontcolor=white:fontsize=22:x=800:y=574[v]"
         )
     else:
         filter_complex += ";[stack]null[v]"
@@ -184,6 +184,48 @@ def compose(source, reaction, output, max_seconds=60, middle_banner=False):
         "-t", f"{duration:.3f}",
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-profile:v", "high", "-level:v", "4.1",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        str(output),
+    ]
+    run(cmd)
+    return output
+
+
+def compose_tvmind(source, output):
+    source = Path(source)
+    source_duration = ffprobe_duration(source)
+    duration = float(source_duration)
+
+    # Exact 1080x1920 layout: top 192px (10%) is the Droxion ad,
+    # remaining 1728px (90%) is the original video.
+    filter_complex = (
+        f"[0:v]scale=1080:1728:force_original_aspect_ratio=increase,"
+        f"crop=1080:1728,setsar=1,fps=30,"
+        f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[video];"
+        f"color=c=black:s=1080x192:r=30:d={duration:.3f}[top];"
+        "[top]"
+        "drawbox=x=40:y=18:w=1000:h=156:color=black@1.0:t=fill,"
+        "drawbox=x=40:y=18:w=1000:h=156:color=red@1.0:t=4,"
+        "drawbox=x=70:y=48:w=96:h=96:color=0x5b45ea@1.0:t=fill,"
+        "drawtext=text='D':fontcolor=white:fontsize=68:x=97:y=59:borderw=2:bordercolor=black,"
+        "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=30:x=190:y=38:borderw=1:bordercolor=black,"
+        "drawtext=text='DROXION':fontcolor=white:fontsize=56:x=190:y=82:borderw=1:bordercolor=black,"
+        "drawbox=x=750:y=46:w=240:h=100:color=black@1.0:t=fill,"
+        "drawbox=x=750:y=46:w=240:h=100:color=white@0.90:t=2,"
+        "drawtext=text='Download on the':fontcolor=white:fontsize=17:x=775:y=57,"
+        "drawtext=text='App Store':fontcolor=white:fontsize=34:x=790:y=88[ad];"
+        "[ad][video]vstack=inputs=2[v]"
+    )
+
+    cmd = [
+        ffmpeg_exe(), "-y",
+        "-i", str(source),
+        "-t", f"{duration:.3f}",
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "0:a?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-profile:v", "high", "-level:v", "4.1",
         "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
@@ -209,6 +251,20 @@ def make_reel(source, caption="", reaction="auto", rights_ok=False, middle_banne
         "middle_banner": bool(middle_banner),
     }, indent=2))
     return out, reaction_item
+
+
+def make_tvmind_reel(source, rights_ok=False):
+    if not rights_ok:
+        raise RuntimeError("Rights approval is required before processing a third-party clip.")
+    local_source = ingest_source(source)
+    out = OUTPUT_DIR / f"tvmind_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.mp4"
+    compose_tvmind(local_source, out)
+    print(json.dumps({
+        "output": str(out),
+        "source": str(local_source),
+        "layout": "top_10_percent_droxion_ad_bottom_90_percent_original",
+    }, indent=2))
+    return out
 
 
 def next_publish_slot():
