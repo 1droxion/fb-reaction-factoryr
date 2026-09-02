@@ -1,2 +1,2 @@
-trigger_id=queued-dashboard-20260831-1342
-reason=process_dashboard_queue_immediately
+trigger_id=meta-token-refresh-20260902-1348
+reason=restart_worker_after_meta_system_user_token_refresh
