@@ -17,6 +17,7 @@ DATA = ROOT / "data"
 REACTIONS = ROOT / "reactions"
 CACHE = DATA / "cloud_upload_cache"
 CLOUD_URL = "https://zlnhaqzawbzagraxhmlb.supabase.co/functions/v1/reaction-factory-cloud"
+OIDC_AUDIENCE = "reaction-factory-cloud"
 STATE_FILES = (
     "source_feeds.txt",
     "approved_urls.txt",
@@ -27,10 +28,14 @@ STATE_FILES = (
 )
 MAX_CLOUD_BYTES = 6 * 1024 * 1024
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+TOKEN_REFRESH_SECONDS = 120
 
 DATA.mkdir(parents=True, exist_ok=True)
 REACTIONS.mkdir(parents=True, exist_ok=True)
 CACHE.mkdir(parents=True, exist_ok=True)
+
+_CLOUD_TOKEN = ""
+_CLOUD_TOKEN_REFRESH_AT = 0.0
 
 
 def load_env():
@@ -51,8 +56,61 @@ def token():
     return value
 
 
-def headers(content_type=None):
-    worker_token = os.getenv("REACTION_FACTORY_CLOUD_TOKEN", "").strip()
+def _github_oidc_available():
+    return bool(
+        os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL", "").strip()
+        and os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "").strip()
+    )
+
+
+def _refresh_worker_token(force=False):
+    global _CLOUD_TOKEN, _CLOUD_TOKEN_REFRESH_AT
+
+    now = time.time()
+    current = os.getenv("REACTION_FACTORY_CLOUD_TOKEN", "").strip()
+
+    if not force and _CLOUD_TOKEN and now < _CLOUD_TOKEN_REFRESH_AT:
+        return _CLOUD_TOKEN
+
+    request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL", "").strip()
+    request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "").strip()
+    if request_url and request_token:
+        sep = "&" if "?" in request_url else "?"
+        oidc_url = request_url
+        if "audience=" not in oidc_url:
+            oidc_url = f"{oidc_url}{sep}audience={quote(OIDC_AUDIENCE)}"
+        try:
+            r = requests.get(
+                oidc_url,
+                headers={"Authorization": f"bearer {request_token}"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            value = str((r.json() or {}).get("value") or "").strip()
+            if not value:
+                raise RuntimeError("GitHub OIDC endpoint returned no token.")
+            _CLOUD_TOKEN = value
+            _CLOUD_TOKEN_REFRESH_AT = now + TOKEN_REFRESH_SECONDS
+            os.environ["REACTION_FACTORY_CLOUD_TOKEN"] = value
+            print("Refreshed private cloud worker identity.")
+            return value
+        except Exception as exc:
+            if current and not force:
+                _CLOUD_TOKEN = current
+                _CLOUD_TOKEN_REFRESH_AT = now + 30
+                return current
+            raise RuntimeError(f"Could not refresh private cloud worker identity: {exc}") from exc
+
+    if current:
+        _CLOUD_TOKEN = current
+        _CLOUD_TOKEN_REFRESH_AT = now + TOKEN_REFRESH_SECONDS
+        return current
+
+    return ""
+
+
+def headers(content_type=None, force_refresh=False):
+    worker_token = _refresh_worker_token(force=force_refresh)
     if worker_token:
         h = {"Authorization": f"Bearer {worker_token}"}
     else:
@@ -63,6 +121,13 @@ def headers(content_type=None):
     if content_type:
         h["Content-Type"] = content_type
     return h
+
+
+def _get(url, timeout):
+    r = requests.get(url, headers=headers(), timeout=timeout)
+    if r.status_code == 401 and _github_oidc_available():
+        r = requests.get(url, headers=headers(force_refresh=True), timeout=timeout)
+    return r
 
 
 def cloud_url(op, **params):
@@ -128,6 +193,14 @@ def upload_file(local_path: Path, remote_path: str):
                     data=f,
                     timeout=180,
                 )
+                if r.status_code == 401 and _github_oidc_available():
+                    f.seek(0)
+                    r = requests.post(
+                        cloud_url("upload", path=remote_path),
+                        headers=headers(content_type, force_refresh=True),
+                        data=f,
+                        timeout=180,
+                    )
             if r.ok:
                 print(f"Uploaded: {remote_path}")
                 return
@@ -143,7 +216,7 @@ def upload_file(local_path: Path, remote_path: str):
 
 
 def download_file(remote_path: str, local_path: Path, required=False):
-    r = requests.get(cloud_url("download", path=remote_path), headers=headers(), timeout=180)
+    r = _get(cloud_url("download", path=remote_path), timeout=180)
     if r.status_code == 404 and not required:
         return False
     if not r.ok:
@@ -155,7 +228,7 @@ def download_file(remote_path: str, local_path: Path, required=False):
 
 
 def list_remote(prefix):
-    r = requests.get(cloud_url("list", prefix=prefix), headers=headers(), timeout=60)
+    r = _get(cloud_url("list", prefix=prefix), timeout=60)
     if not r.ok:
         raise RuntimeError(f"Cloud list failed: {r.status_code} {r.text[:300]}")
     return (r.json() or {}).get("files") or []
@@ -262,7 +335,7 @@ def pull_state():
 
 
 def health():
-    r = requests.get(cloud_url("health"), headers=headers(), timeout=30)
+    r = _get(cloud_url("health"), timeout=30)
     if not r.ok:
         raise RuntimeError(f"Cloud gateway failed: {r.status_code} {r.text[:300]}")
     print(json.dumps(r.json(), indent=2))
