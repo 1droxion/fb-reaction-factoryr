@@ -9,6 +9,7 @@ on:
       - 'fb-reaction-factory/channel_queue.py'
       - 'fb-reaction-factory/cloud_job.py'
       - 'fb-reaction-factory/cloud_multiplatform.py'
+      - 'fb-reaction-factory/cloud_sync.py'
       - 'fb-reaction-factory/cloud_youtube_auth.py'
       - 'fb-reaction-factory/youtube_download.py'
       - 'fb-reaction-factory/requirements.txt'
@@ -69,9 +70,6 @@ jobs:
       - name: Install Python requirements
         run: python -m pip install -r requirements.txt
 
-      # Instant Personal/TV Mind jobs use Instagram/Facebook and must not be
-      # blocked while a YouTube PO-token container is pulled. YouTube cloud
-      # downloading is intentionally not a startup dependency for this worker.
       - name: Validate Meta credentials
         run: python meta_preflight.py
 
