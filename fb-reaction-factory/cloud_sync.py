@@ -52,13 +52,14 @@ def token():
 
 
 def headers(content_type=None):
-    # Use a custom header for the internal worker gateway. This avoids any
-    # platform-level handling of the normal Authorization header while the
-    # gateway still validates the token against the configured Meta Page.
-    h = {
-        "X-Meta-Access-Token": token(),
-        "X-Meta-Version": os.getenv("META_GRAPH_VERSION", "v26.0"),
-    }
+    worker_token = os.getenv("REACTION_FACTORY_CLOUD_TOKEN", "").strip()
+    if worker_token:
+        h = {"Authorization": f"Bearer {worker_token}"}
+    else:
+        h = {
+            "X-Meta-Access-Token": token(),
+            "X-Meta-Version": os.getenv("META_GRAPH_VERSION", "v26.0"),
+        }
     if content_type:
         h["Content-Type"] = content_type
     return h
