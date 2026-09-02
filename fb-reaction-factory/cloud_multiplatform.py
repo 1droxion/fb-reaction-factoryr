@@ -27,6 +27,7 @@ def normalize_options(raw):
     if privacy not in {"public", "unlisted", "private"}:
         privacy = "public"
     return {
+        "lane": str(raw.get("lane") or "").strip().lower(),
         "instagram": bool(raw.get("instagram", True)),
         "youtube": bool(raw.get("youtube", False)),
         "facebook": bool(raw.get("facebook", False)),
@@ -34,14 +35,23 @@ def normalize_options(raw):
     }
 
 
+def is_instant_old_dashboard_job(options):
+    lane = options.get("lane")
+    if options.get("youtube"):
+        return False
+    if lane == "personal" and options.get("instagram") and not options.get("facebook"):
+        return True
+    if lane == "tvmind" and options.get("facebook") and not options.get("instagram"):
+        return True
+    return False
+
+
 def next_cloud_url(state):
     preferred = str(state.get("last_url") or "").strip()
     processed = state.setdefault("processed", {})
     failed = state.setdefault("failed", {})
-
     if preferred and processed.get(preferred) != "success" and not failed.get(preferred, {}).get("skip"):
         return preferred
-
     for url in approved_urls():
         if processed.get(url) == "success":
             continue
@@ -59,13 +69,7 @@ def _sync(progress_sync):
 def _progress(url, stage, detail, progress_sync=None, status="active", **extra):
     state = load_state()
     state["last_url"] = url
-    payload = {
-        "url": url,
-        "stage": stage,
-        "status": status,
-        "detail": detail,
-        "updated_at": now_iso(),
-    }
+    payload = {"url": url, "stage": stage, "status": status, "detail": detail, "updated_at": now_iso()}
     payload.update({k: v for k, v in extra.items() if v is not None})
     state["current_progress"] = payload
     save_state(state)
@@ -75,11 +79,7 @@ def _progress(url, stage, detail, progress_sync=None, status="active", **extra):
 def _destination_success(url, name, result, progress_sync=None):
     state = load_state()
     per_url = state.setdefault("destination_status", {}).setdefault(url, {})
-    per_url[name] = {
-        "status": "success",
-        "at": now_iso(),
-        "result": result or {},
-    }
+    per_url[name] = {"status": "success", "at": now_iso(), "result": result or {}}
     save_state(state)
     _sync(progress_sync)
 
@@ -87,11 +87,7 @@ def _destination_success(url, name, result, progress_sync=None):
 def _destination_failure(url, name, exc, progress_sync=None):
     state = load_state()
     per_url = state.setdefault("destination_status", {}).setdefault(url, {})
-    per_url[name] = {
-        "status": "failed",
-        "at": now_iso(),
-        "error": str(exc),
-    }
+    per_url[name] = {"status": "failed", "at": now_iso(), "error": str(exc)}
     save_state(state)
     _sync(progress_sync)
 
@@ -103,12 +99,7 @@ def _already_posted(url, name):
 
 
 def _history(state, status, url, options, results=None, error=None):
-    item = {
-        "at": now_iso(),
-        "status": status,
-        "url": url,
-        "destinations": options,
-    }
+    item = {"at": now_iso(), "status": status, "url": url, "destinations": options}
     results = results or {}
     if results.get("instagram"):
         item["instagram_permalink"] = results["instagram"].get("permalink")
@@ -130,20 +121,14 @@ def process_cloud_job(url, options, progress_sync=None):
         raise RuntimeError("Choose at least one destination.")
 
     require_explicit_approval(url)
-    reaction_needed = options["instagram"] or options["youtube"]
+    instant_old = is_instant_old_dashboard_job(options)
+    reaction_needed = instant_old or options["instagram"] or options["youtube"]
 
-    _progress(url, "downloading", "Downloading source once...", progress_sync)
+    _progress(url, "downloading", "Downloading source now...", progress_sync)
     source_context = source_context_from_url(url)
     source = Path(download_url(url))
     duration = ffprobe_duration(source)
-    _progress(
-        url,
-        "downloaded",
-        f"Download complete · {duration:.1f}s",
-        progress_sync,
-        status="done",
-        duration_seconds=round(duration, 1),
-    )
+    _progress(url, "downloaded", f"Download complete · {duration:.1f}s", progress_sync, status="done", duration_seconds=round(duration, 1))
 
     reaction_video = None
     metadata = None
@@ -151,18 +136,16 @@ def process_cloud_job(url, options, progress_sync=None):
 
     if reaction_needed:
         if duration < MIN_SOURCE_SECONDS or duration > MAX_SOURCE_SECONDS:
-            raise RuntimeError(
-                f"Source is {duration:.1f}s. Instagram/YouTube reaction mode needs {MIN_SOURCE_SECONDS:.0f}-{MAX_SOURCE_SECONDS:.0f}s."
-            )
+            raise RuntimeError(f"Source is {duration:.1f}s. Instant reaction mode needs {MIN_SOURCE_SECONDS:.0f}-{MAX_SOURCE_SECONDS:.0f}s.")
         caption_seed = source_context or clean_caption_seed(source)
-        _progress(url, "editing", "Creating one reaction short for Instagram + YouTube...", progress_sync)
+        _progress(url, "editing", "Creating 30/70 reaction edit with WAIT FOR END 😂...", progress_sync)
         reaction_video, reaction_used = make_reel(
-            str(source), caption=caption_seed, reaction="auto", rights_ok=True
+            str(source), caption=caption_seed, reaction="auto", rights_ok=True,
+            middle_banner=instant_old,
         )
         reaction_video = Path(reaction_video)
-        _progress(url, "edited", "Reaction short ready.", progress_sync, status="done")
-
-        _progress(url, "metadata", "Creating title, caption and tags...", progress_sync)
+        _progress(url, "edited", "30/70 reaction edit ready.", progress_sync, status="done")
+        _progress(url, "metadata", "Creating caption and tags...", progress_sync)
         metadata = generate_metadata(caption_seed)
         text_path, json_path, post_text = write_package(
             reaction_video,
@@ -175,20 +158,13 @@ def process_cloud_job(url, options, progress_sync=None):
                 "source_looped": False,
                 "rights_gate": "approved_queue",
                 "cloud_multi_platform": True,
+                "instant_old_dashboard": instant_old,
             },
         )
         post_text = add_source_disclosure(post_text, text_path, json_path, url)
-        _progress(
-            url,
-            "metadata_done",
-            "Metadata ready.",
-            progress_sync,
-            status="done",
-            title=metadata.get("title"),
-            hashtags=metadata.get("hashtags"),
-        )
+        _progress(url, "metadata_done", "Metadata ready.", progress_sync, status="done", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
     else:
-        _progress(url, "metadata_done", "Facebook Direct uses the original video.", progress_sync, status="done")
+        _progress(url, "metadata_done", "Direct post uses the original video.", progress_sync, status="done")
 
     results = {"instagram": None, "youtube": None, "facebook": None}
     failures = {}
@@ -198,7 +174,7 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["instagram"] = prior
         else:
-            _progress(url, "publishing_instagram", "Publishing reaction short to Instagram...", progress_sync)
+            _progress(url, "publishing_instagram", "Posting edited Reel to Instagram now...", progress_sync)
             try:
                 result = publish_instagram(reaction_video, post_text)
                 results["instagram"] = result
@@ -233,9 +209,11 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["facebook"] = prior
         else:
-            _progress(url, "publishing_facebook", "Publishing original video to TV Mind USA...", progress_sync)
+            target_video = reaction_video if instant_old else source
+            target_text = post_text if instant_old else ""
+            _progress(url, "publishing_facebook", "Posting edited Reel to TV Mind now..." if instant_old else "Publishing video to Facebook...", progress_sync)
             try:
-                result = publish_facebook(source, "")
+                result = publish_facebook(target_video, target_text, profile="tvmind" if options.get("lane") == "tvmind" else None)
                 results["facebook"] = result
                 _destination_success(url, "facebook", result, progress_sync)
             except Exception as exc:
@@ -256,12 +234,8 @@ def run_cloud_cycle(progress_sync=None):
     state["last_error"] = None
     state["next_run"] = None
     state["current_progress"] = {
-        "url": url,
-        "stage": "queued",
-        "status": "done",
-        "detail": "Queued for cloud processing",
-        "updated_at": now_iso(),
-        "destinations": options,
+        "url": url, "stage": "queued", "status": "done", "detail": "Queued for immediate cloud processing",
+        "updated_at": now_iso(), "destinations": options,
     }
     save_state(state)
     _sync(progress_sync)
@@ -273,14 +247,7 @@ def run_cloud_cycle(progress_sync=None):
         state["last_url"] = url
         state["last_error"] = str(exc)
         state.setdefault("failed", {})[url] = {"error": str(exc), "at": now_iso(), "skip": True}
-        state["current_progress"] = {
-            "url": url,
-            "stage": "failed",
-            "status": "error",
-            "detail": str(exc),
-            "updated_at": now_iso(),
-            "destinations": options,
-        }
+        state["current_progress"] = {"url": url, "stage": "failed", "status": "error", "detail": str(exc), "updated_at": now_iso(), "destinations": options}
         _history(state, "failed", url, options, error=exc)
         save_state(state)
         _sync(progress_sync)
@@ -292,14 +259,7 @@ def run_cloud_cycle(progress_sync=None):
         state["last_url"] = url
         state["last_error"] = detail
         state.setdefault("failed", {})[url] = {"error": detail, "at": now_iso(), "skip": True}
-        state["current_progress"] = {
-            "url": url,
-            "stage": "failed",
-            "status": "error",
-            "detail": detail,
-            "updated_at": now_iso(),
-            "destinations": options,
-        }
+        state["current_progress"] = {"url": url, "stage": "failed", "status": "error", "detail": detail, "updated_at": now_iso(), "destinations": options}
         _history(state, "failed", url, options, results=results, error=detail)
         save_state(state)
         _sync(progress_sync)
@@ -311,7 +271,7 @@ def run_cloud_cycle(progress_sync=None):
     if options["youtube"]:
         completed.append("YouTube Shorts")
     if options["facebook"]:
-        completed.append("TV Mind USA")
+        completed.append("TV Mind")
 
     state = load_state()
     state.setdefault("processed", {})[url] = "success"
@@ -320,12 +280,8 @@ def run_cloud_cycle(progress_sync=None):
     state["last_error"] = None
     state["last_results"] = results
     state["current_progress"] = {
-        "url": url,
-        "stage": "posted",
-        "status": "done",
-        "detail": "Published to: " + ", ".join(completed),
-        "updated_at": now_iso(),
-        "destinations": options,
+        "url": url, "stage": "posted", "status": "done", "detail": "Posted now to: " + ", ".join(completed),
+        "updated_at": now_iso(), "destinations": options,
         "instagram_permalink": (results.get("instagram") or {}).get("permalink"),
         "youtube_url": (results.get("youtube") or {}).get("url"),
         "youtube_channel": (results.get("youtube") or {}).get("channel"),
