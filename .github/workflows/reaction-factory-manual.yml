@@ -71,12 +71,15 @@ jobs:
       - name: Install Python requirements
         run: python -m pip install -r requirements.txt
 
-      - name: Prepare FFmpeg
+      - name: Install full FFmpeg with text support
         shell: bash
         run: |
-          FFMPEG_BIN="$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
-          sudo ln -sf "$FFMPEG_BIN" /usr/local/bin/ffmpeg
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-dejavu-core
+          hash -r
           ffmpeg -version | head -n 1
+          ffmpeg -filters | grep -q drawtext
+          echo "FFmpeg drawtext support is ready."
 
       - name: Get private cloud worker identity
         shell: bash
