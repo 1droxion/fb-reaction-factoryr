@@ -17,6 +17,7 @@ from instagram_download import download_instagram_reel, is_instagram_url
 from metadata import generate_metadata
 from prepare_reel import write_package
 from reaction_factory import ffprobe_duration, make_reel
+from youtube_download import download_youtube, is_youtube_url, metadata_json
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
@@ -156,15 +157,19 @@ def ytdlp():
 
 def source_context_from_url(url):
     try:
-        p = subprocess.run(
-            [ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if p.returncode != 0 or not p.stdout.strip():
-            return None
-        info = json.loads(p.stdout)
+        raw = metadata_json(url) if is_youtube_url(url) else None
+        if raw:
+            info = json.loads(raw)
+        else:
+            p = subprocess.run(
+                [ytdlp(), "--skip-download", "--no-playlist", "--dump-single-json", url],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if p.returncode != 0 or not p.stdout.strip():
+                return None
+            info = json.loads(p.stdout)
         parts = []
         for key in ("title", "description"):
             value = str(info.get(key) or "").strip()
@@ -230,20 +235,24 @@ def download_url(url):
             print(f"Google Drive direct download failed, trying yt-dlp: {exc}")
 
     template = str(INBOX / f"approved_{token}.%(ext)s")
-    cmd = [
-        ytdlp(), "--no-playlist",
-        "-f", "bv*+ba/b",
-        "--merge-output-format", "mp4",
-        "-o", template,
-        url,
-    ]
     print(f"Downloading approved URL: {url}")
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError:
-        if url.lower().endswith((".mp4", ".mov", ".m4v", ".webm")):
-            return direct_download(url, token)
-        raise
+
+    if is_youtube_url(url):
+        download_youtube(url, template)
+    else:
+        cmd = [
+            ytdlp(), "--no-playlist",
+            "-f", "bv*+ba/b",
+            "--merge-output-format", "mp4",
+            "-o", template,
+            url,
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError:
+            if url.lower().endswith((".mp4", ".mov", ".m4v", ".webm")):
+                return direct_download(url, token)
+            raise
 
     matches = sorted(INBOX.glob(f"approved_{token}.*"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
@@ -358,28 +367,24 @@ def run_once(publish_fb=False, publish_ig=False):
         try:
             results = process_url(url, publish_fb=publish_fb, publish_ig=publish_ig)
             done[url] = "success"
-            state["last"] = {"url": url, "results": results}
+            state["last_results"] = results
             save_state(state)
-            return True
+            return results
         except Exception as exc:
             done[url] = f"error: {exc}"
-            state["last"] = {"url": url, "error": str(exc)}
+            state["last_error"] = str(exc)
             save_state(state)
-            print(f"ERROR: {exc}")
-            continue
-    print(f"No new approved URLs. Add one per line to: {URLS_FILE}")
-    return False
+            raise
+    return None
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Approved URL -> reaction Reel -> metadata -> Facebook Page/Instagram publishing")
-    ap.add_argument("--publish-facebook", action="store_true")
-    ap.add_argument("--publish-instagram", action="store_true")
-    ap.add_argument("--publish-both", action="store_true")
+    ap = argparse.ArgumentParser(description="Approved URL -> reaction short pipeline")
+    ap.add_argument("--publish-fb", action="store_true")
+    ap.add_argument("--publish-ig", action="store_true")
     args = ap.parse_args()
-    fb = args.publish_facebook or args.publish_both
-    ig = args.publish_instagram or args.publish_both
-    run_once(publish_fb=fb, publish_ig=ig)
+    result = run_once(publish_fb=args.publish_fb, publish_ig=args.publish_ig)
+    print(json.dumps(result, indent=2) if result else "No approved URLs waiting.")
 
 
 if __name__ == "__main__":
