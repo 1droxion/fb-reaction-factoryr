@@ -2,6 +2,7 @@
 import os
 import time
 
+from channel_dispatch import run_channel_dispatch
 from cloud_multiplatform import run_cloud_cycle
 from cloud_sync import load_env, pull_reactions, pull_state, push_state
 from cloud_youtube_auth import pull_youtube_token
@@ -29,8 +30,9 @@ def main():
     while time.monotonic() - started < MAX_RUNTIME_SECONDS:
         try:
             pull_state()
-            status = run_cloud_cycle(progress_sync=push_state)
-            if status == "idle":
+            channel_status = run_channel_dispatch(progress_sync=push_state)
+            status = run_cloud_cycle(progress_sync=push_state) if channel_status == "no-channel" else channel_status
+            if status in {"idle", "waiting"}:
                 time.sleep(POLL_SECONDS)
             else:
                 print(f"Cloud job finished with status: {status}")
