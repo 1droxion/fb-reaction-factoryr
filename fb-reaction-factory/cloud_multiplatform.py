@@ -14,7 +14,7 @@ from facebook import publish_reel as publish_facebook
 from instagram import publish_reel as publish_instagram
 from metadata import generate_metadata
 from prepare_reel import write_package
-from reaction_factory import ffprobe_duration, make_reel
+from reaction_factory import ffprobe_duration, make_reel, make_tvmind_reel
 from youtube_short import publish_short
 
 MIN_SOURCE_SECONDS = 4.0
@@ -120,6 +120,7 @@ def process_cloud_job(url, options, progress_sync=None):
     require_explicit_approval(url)
     personal_reaction = is_personal_reaction_job(options)
     reaction_needed = bool(options["instagram"] or options["youtube"])
+    tvmind_edit_needed = bool(options["facebook"] and options.get("lane") in {"tvmind", "tvmind_direct"})
 
     _progress(url, "downloading", "Downloading source now...", progress_sync)
     source_context = source_context_from_url(url)
@@ -128,6 +129,7 @@ def process_cloud_job(url, options, progress_sync=None):
     _progress(url, "downloaded", f"Download complete · {duration:.1f}s", progress_sync, status="done", duration_seconds=round(duration, 1))
 
     reaction_video = None
+    tvmind_video = None
     metadata = None
     post_text = ""
 
@@ -163,6 +165,10 @@ def process_cloud_job(url, options, progress_sync=None):
         )
         post_text = add_source_disclosure(post_text, text_path, json_path, url)
         _progress(url, "metadata_done", "Title, caption and tags ready.", progress_sync, status="done", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
+    elif tvmind_edit_needed:
+        _progress(url, "editing_tvmind", "Adding Droxion ad to top 10% and keeping video at 90%...", progress_sync)
+        tvmind_video = Path(make_tvmind_reel(str(source), rights_ok=True))
+        _progress(url, "edited_tvmind", "TV Mind 10/90 edit ready.", progress_sync, status="done")
     else:
         _progress(url, "metadata_done", "Direct post uses the original video.", progress_sync, status="done")
 
@@ -210,9 +216,10 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["facebook"] = prior
         else:
-            _progress(url, "publishing_facebook", "Publishing original video to TV Mind USA...", progress_sync)
+            _progress(url, "publishing_facebook", "Publishing TV Mind USA video to Facebook...", progress_sync)
             try:
-                result = publish_facebook(source, "", profile="tvmind" if options.get("lane") in {"tvmind", "tvmind_direct"} else None)
+                facebook_video = tvmind_video or source
+                result = publish_facebook(facebook_video, "", profile="tvmind" if options.get("lane") in {"tvmind", "tvmind_direct"} else None)
                 results["facebook"] = result
                 _destination_success(url, "facebook", result, progress_sync)
             except Exception as exc:
