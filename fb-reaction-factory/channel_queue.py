@@ -65,7 +65,10 @@ DAILY_SLOTS = (9, 14, 20)
 
 
 def is_channel_job(raw):
-    lane = str((raw or {}).get("lane") or "").strip().lower()
+    raw = raw if isinstance(raw, dict) else {}
+    if str(raw.get("mode") or "").strip().lower() == "instant":
+        return False
+    lane = str(raw.get("lane") or "").strip().lower()
     return lane in LANES
 
 
