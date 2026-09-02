@@ -27,7 +27,6 @@ for d in (REACTIONS_DIR, SOURCES_DIR, OUTPUT_DIR, DATA_DIR):
 
 
 def ffmpeg_exe():
-    """Return the bundled imageio-ffmpeg executable so Windows needs no system FFmpeg install."""
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
@@ -55,7 +54,6 @@ def run(cmd):
 
 
 def ffprobe_duration(path):
-    """Get media duration with the bundled FFmpeg package; no separate ffprobe binary required."""
     try:
         _frames, seconds = imageio_ffmpeg.count_frames_and_secs(str(path))
         seconds = float(seconds)
@@ -76,9 +74,7 @@ def ingest_source(source):
     if source.startswith("http://") or source.startswith("https://"):
         ytdlp = shutil.which("yt-dlp")
         if not ytdlp:
-            raise RuntimeError(
-                "URL ingest needs yt-dlp. Install it first with: python -m pip install yt-dlp"
-            )
+            raise RuntimeError("URL ingest needs yt-dlp. Install it first with: python -m pip install yt-dlp")
         target_tpl = str(SOURCES_DIR / f"{uuid.uuid4().hex[:10]}.%(ext)s")
         ffmpeg_dir = str(Path(ffmpeg_exe()).parent)
         run([
@@ -158,15 +154,20 @@ def compose(source, reaction, output, max_seconds=60, middle_banner=False):
     )
 
     if middle_banner:
-        # The seam is at y=576: reaction is the top 30%, source is the lower 70%.
-        # Keep the full 1080x1920 frame and overlay a compact black/red banner
-        # directly across that seam, with high-contrast green hook text.
+        # Compact branded promo centered on the 30/70 seam.
+        # It stays deliberately small so it does not cover the reaction or source video.
         filter_complex += (
             ";[stack]"
-            "drawbox=x=0:y=530:w=iw:h=92:color=black@0.92:t=fill,"
-            "drawbox=x=0:y=530:w=iw:h=92:color=red@1.0:t=5,"
-            "drawtext=text='WAIT FOR END 😂':fontcolor=0x39FF72:fontsize=50:"
-            "x=(w-text_w)/2:y=548:borderw=2:bordercolor=black[v]"
+            "drawbox=x=110:y=535:w=860:h=82:color=black@0.94:t=fill,"
+            "drawbox=x=110:y=535:w=860:h=82:color=red@1.0:t=4,"
+            "drawbox=x=126:y=549:w=54:h=54:color=0x5b45ea@1.0:t=fill,"
+            "drawtext=text='D':fontcolor=white:fontsize=38:x=140:y=555:borderw=1:bordercolor=black,"
+            "drawtext=text='DOWNLOAD':fontcolor=0x55f000:fontsize=25:x=198:y=542:borderw=1:bordercolor=black,"
+            "drawtext=text='DROXION':fontcolor=white:fontsize=39:x=198:y=566:borderw=1:bordercolor=black,"
+            "drawbox=x=712:y=550:w=238:h=52:color=black@1.0:t=fill,"
+            "drawbox=x=712:y=550:w=238:h=52:color=white@0.85:t=2,"
+            "drawtext=text='Download on the':fontcolor=white:fontsize=14:x=731:y=553,"
+            "drawtext=text='App Store':fontcolor=white:fontsize=24:x=755:y=570[v]"
         )
     else:
         filter_complex += ";[stack]null[v]"
