@@ -138,7 +138,7 @@ def choose_reaction(caption="", preferred="auto"):
     return random.choice(items)
 
 
-def compose(source, reaction, output, max_seconds=60):
+def compose(source, reaction, output, max_seconds=60, middle_banner=False):
     source = Path(source)
     reaction = Path(reaction)
     source_duration = ffprobe_duration(source)
@@ -154,8 +154,22 @@ def compose(source, reaction, output, max_seconds=60):
         f"[1:v]scale=1080:1344:force_original_aspect_ratio=increase,"
         f"crop=1080:1344,setsar=1,fps=30,"
         f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[source];"
-        "[reaction][source]vstack=inputs=2[v]"
+        "[reaction][source]vstack=inputs=2[stack]"
     )
+
+    if middle_banner:
+        # The seam is at y=576: reaction is the top 30%, source is the lower 70%.
+        # Keep the full 1080x1920 frame and overlay a compact black/red banner
+        # directly across that seam, with high-contrast green hook text.
+        filter_complex += (
+            ";[stack]"
+            "drawbox=x=0:y=530:w=iw:h=92:color=black@0.92:t=fill,"
+            "drawbox=x=0:y=530:w=iw:h=92:color=red@1.0:t=5,"
+            "drawtext=text='WAIT FOR END 😂':fontcolor=0x39FF72:fontsize=50:"
+            "x=(w-text_w)/2:y=548:borderw=2:bordercolor=black[v]"
+        )
+    else:
+        filter_complex += ";[stack]null[v]"
 
     cmd = [
         ffmpeg_exe(), "-y",
@@ -174,18 +188,19 @@ def compose(source, reaction, output, max_seconds=60):
     return output
 
 
-def make_reel(source, caption="", reaction="auto", rights_ok=False):
+def make_reel(source, caption="", reaction="auto", rights_ok=False, middle_banner=False):
     if not rights_ok:
         raise RuntimeError("Rights approval is required before processing a third-party clip.")
     local_source = ingest_source(source)
     reaction_item = choose_reaction(caption, reaction)
     out = OUTPUT_DIR / f"reel_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.mp4"
-    compose(local_source, reaction_item["path"], out)
+    compose(local_source, reaction_item["path"], out, middle_banner=middle_banner)
     print(json.dumps({
         "output": str(out),
         "source": str(local_source),
         "reaction": reaction_item,
         "caption": caption,
+        "middle_banner": bool(middle_banner),
     }, indent=2))
     return out, reaction_item
 
@@ -257,6 +272,7 @@ def main():
     p.add_argument("--caption", default="")
     p.add_argument("--reaction", default="auto")
     p.add_argument("--rights-ok", action="store_true", required=True)
+    p.add_argument("--middle-banner", action="store_true")
 
     p = sub.add_parser("queue")
     p.add_argument("--source", required=True, help="Approved/licensed local video path or URL")
@@ -271,7 +287,7 @@ def main():
     if args.cmd == "add-reaction":
         add_reaction(args.path, args.label, args.notes)
     elif args.cmd == "make":
-        make_reel(args.source, args.caption, args.reaction, args.rights_ok)
+        make_reel(args.source, args.caption, args.reaction, args.rights_ok, args.middle_banner)
     elif args.cmd == "queue":
         queue_job(args.source, args.caption, args.reaction, args.rights_ok, args.publish_at)
     elif args.cmd == "list":
