@@ -88,7 +88,7 @@ def _config():
     if not page_token and system_token:
         page_token = _resolve_page_token(page_id, system_token, version)
 
-    # Prefer the stable automation credentials. Keep the old user token only as a
+    # Prefer stable automation credentials. Keep the old user token only as a
     # last-resort fallback so a logged-out Facebook session cannot break posting.
     tokens = []
     seen = set()
@@ -120,17 +120,20 @@ def _wait_for_container(container_id, token, version, timeout_seconds):
     last_status = None
 
     while time.time() < deadline:
+        # Meta's Reels Publishing flow documents polling the container with
+        # fields=status_code. Asking for unsupported fields such as status or
+        # video_status can make Graph return code 100 / subcode 2207065.
         response = requests.get(
             status_url,
             params={
-                "fields": "id,status,status_code,video_status",
+                "fields": "status_code",
                 "access_token": token,
             },
             timeout=60,
         )
         data = _json(response, "container status")
         code = str(data.get("status_code") or "").upper()
-        last_status = data.get("status") or data.get("video_status") or code
+        last_status = code or "UNKNOWN"
         if code == "FINISHED":
             return data
         if code in {"ERROR", "EXPIRED"}:
