@@ -71,15 +71,20 @@ jobs:
       - name: Install Python requirements
         run: python -m pip install -r requirements.txt
 
-      - name: Install full FFmpeg with text support
+      - name: Prepare FFmpeg with text support
         shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-dejavu-core
-          hash -r
-          ffmpeg -version | head -n 1
-          ffmpeg -filters | grep -q drawtext
-          echo "FFmpeg drawtext support is ready."
+          FFMPEG_BIN="$(command -v ffmpeg || true)"
+          if [ -z "$FFMPEG_BIN" ] || ! "$FFMPEG_BIN" -filters 2>/dev/null | grep -q drawtext; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-dejavu-core
+            hash -r
+            FFMPEG_BIN="$(command -v ffmpeg)"
+          fi
+          "$FFMPEG_BIN" -version | head -n 1
+          "$FFMPEG_BIN" -filters | grep -q drawtext
+          echo "REACTION_FACTORY_FFMPEG=$FFMPEG_BIN" >> "$GITHUB_ENV"
+          echo "FFmpeg banner/text support is ready at $FFMPEG_BIN."
 
       - name: Get private cloud worker identity
         shell: bash
