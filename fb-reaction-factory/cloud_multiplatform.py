@@ -132,10 +132,13 @@ def process_cloud_job(url, options, progress_sync=None):
     post_text = ""
 
     if reaction_needed:
-        if duration < MIN_SOURCE_SECONDS or duration > MAX_SOURCE_SECONDS:
-            raise RuntimeError(f"Source is {duration:.1f}s. Instant reaction mode needs {MIN_SOURCE_SECONDS:.0f}-{MAX_SOURCE_SECONDS:.0f}s.")
+        if duration < MIN_SOURCE_SECONDS:
+            raise RuntimeError(f"Source is {duration:.1f}s. Instant reaction mode needs at least {MIN_SOURCE_SECONDS:.0f}s.")
         caption_seed = source_context or clean_caption_seed(source)
-        _progress(url, "editing", "Creating 30/70 reaction edit with Droxion banner...", progress_sync)
+        edit_detail = "Creating 30/70 reaction edit with Droxion banner..."
+        if duration > MAX_SOURCE_SECONDS:
+            edit_detail = f"Creating 30/70 reaction edit from the first {MAX_SOURCE_SECONDS:.0f}s with Droxion banner..."
+        _progress(url, "editing", edit_detail, progress_sync)
         reaction_video, reaction_used = make_reel(
             str(source), caption=caption_seed, reaction="auto", rights_ok=True,
             middle_banner=personal_reaction,
