@@ -166,9 +166,9 @@ def process_cloud_job(url, options, progress_sync=None):
         post_text = add_source_disclosure(post_text, text_path, json_path, url)
         _progress(url, "metadata_done", "Title, caption and tags ready.", progress_sync, status="done", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
     elif tvmind_edit_needed:
-        _progress(url, "editing_tvmind", "Adding Droxion ad to top 10% and keeping video at 90%...", progress_sync)
+        _progress(url, "editing_tvmind", "Creating TV Mind edit: 33% Droxion promo + 67% original video...", progress_sync)
         tvmind_video = Path(make_tvmind_reel(str(source), rights_ok=True))
-        _progress(url, "edited_tvmind", "TV Mind 10/90 edit ready.", progress_sync, status="done")
+        _progress(url, "edited_tvmind", "TV Mind 33/67 edit ready.", progress_sync, status="done")
     else:
         _progress(url, "metadata_done", "Direct post uses the original video.", progress_sync, status="done")
 
