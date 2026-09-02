@@ -73,8 +73,8 @@ def ensure_url_file():
     if not URLS_FILE.exists():
         URLS_FILE.write_text(
             "# Put one approved source video URL per line.\n"
-            "# Supports public Instagram/Facebook/video URLs and Google Drive shared files.\n"
-            "# Only add URLs you own or have permission/license to download and reuse.\n",
+            "# Supports public Instagram/Facebook/video URLs, Google Drive shared files, and private Reaction Factory uploads.\n"
+            "# Only add URLs/files you own or have permission/license to download and reuse.\n",
             encoding="utf-8",
         )
 
@@ -115,14 +115,12 @@ def source_credit_for_url(url):
     selected = state.get("last_selected") or {}
     if not isinstance(selected, dict):
         return None
-
     selected_urls = {
         comparable_url(str(selected.get("url") or "")),
         comparable_url(str(selected.get("permalink") or "")),
     }
     if comparable_url(url) not in selected_urls:
         return None
-
     account = str(selected.get("source_account") or "").strip().lstrip("@")
     return f"@{account}" if account else None
 
@@ -132,10 +130,8 @@ def add_source_disclosure(post_text, text_path, json_path, url):
     disclosure = "Reaction edit from an approved source."
     if credit:
         disclosure += f" Source credit: {credit}."
-
     final_text = "\n\n".join(x for x in (post_text.strip(), disclosure) if x).strip()
     text_path.write_text(final_text + "\n", encoding="utf-8")
-
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8"))
     except Exception:
@@ -155,7 +151,19 @@ def ytdlp():
     return exe
 
 
+def is_cloud_upload_url(url):
+    return str(url or "").startswith("rf-upload://uploads/")
+
+
+def cloud_upload_path(url):
+    if not is_cloud_upload_url(url):
+        return None
+    return str(url)[len("rf-upload://"):]
+
+
 def source_context_from_url(url):
+    if is_cloud_upload_url(url):
+        return None
     try:
         raw = metadata_json(url) if is_youtube_url(url) else None
         if raw:
@@ -193,7 +201,6 @@ def google_drive_direct_url(url):
     host = parsed.netloc.lower()
     if "drive.google.com" not in host and "docs.google.com" not in host:
         return None
-
     match = re.search(r"/file/d/([^/]+)", parsed.path)
     file_id = match.group(1) if match else None
     if not file_id:
@@ -221,6 +228,18 @@ def direct_download(url, token):
 
 
 def download_url(url):
+    if is_cloud_upload_url(url):
+        remote_path = cloud_upload_path(url)
+        token = uuid.uuid4().hex[:10]
+        suffix = Path(remote_path).suffix or ".mp4"
+        target = INBOX / f"uploaded_{token}{suffix}"
+        from cloud_sync import download_file
+        print(f"Downloading private Reaction Factory upload: {remote_path}")
+        download_file(remote_path, target, required=True)
+        if not target.exists() or target.stat().st_size < 10000:
+            raise RuntimeError("Private uploaded video could not be restored from cloud storage.")
+        return target
+
     if is_instagram_url(url):
         print("Downloading approved Instagram Reel...")
         return download_instagram_reel(url)
@@ -236,7 +255,6 @@ def download_url(url):
 
     template = str(INBOX / f"approved_{token}.%(ext)s")
     print(f"Downloading approved URL: {url}")
-
     if is_youtube_url(url):
         download_youtube(url, template)
     else:
@@ -253,7 +271,6 @@ def download_url(url):
             if url.lower().endswith((".mp4", ".mov", ".m4v", ".webm")):
                 return direct_download(url, token)
             raise
-
     matches = sorted(INBOX.glob(f"approved_{token}.*"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not matches:
         raise RuntimeError("Download finished but no file was found.")
@@ -269,6 +286,7 @@ def clean_caption_seed(source):
         or lower.startswith("approved ")
         or lower.startswith("instagram ")
         or lower.startswith("reel ")
+        or lower.startswith("uploaded ")
     ):
         return "funny reaction"
     return raw or "funny reaction"
@@ -276,67 +294,39 @@ def clean_caption_seed(source):
 
 def process_url(url, publish_fb=False, publish_ig=False, progress_callback=None):
     require_explicit_approval(url)
-
     emit_progress(progress_callback, "downloading", detail="Downloading source Reel")
     source_context = source_context_from_url(url)
     source = download_url(url)
     duration = ffprobe_duration(source)
-    emit_progress(
-        progress_callback,
-        "downloaded",
-        status="done",
-        detail=f"Download complete · {duration:.1f}s",
-        duration_seconds=round(duration, 1),
-    )
-
+    emit_progress(progress_callback, "downloaded", status="done", detail=f"Download complete · {duration:.1f}s", duration_seconds=round(duration, 1))
     if duration < MIN_SECONDS or duration > MAX_SECONDS:
-        raise RuntimeError(
-            f"Source is {duration:.1f}s. AutoPilot requires {MIN_SECONDS:.0f}-{MAX_SECONDS:.0f}s."
-        )
-
+        raise RuntimeError(f"Source is {duration:.1f}s. AutoPilot requires {MIN_SECONDS:.0f}-{MAX_SECONDS:.0f}s.")
     caption_seed = source_context or clean_caption_seed(source)
     emit_progress(progress_callback, "editing", detail="Making 30/70 reaction edit")
-    video, reaction_used = make_reel(
-        str(source), caption=caption_seed, reaction="auto", rights_ok=True
-    )
+    video, reaction_used = make_reel(str(source), caption=caption_seed, reaction="auto", rights_ok=True)
     emit_progress(progress_callback, "edited", status="done", detail="Reaction edit complete")
-
     emit_progress(progress_callback, "metadata", detail="Creating title, caption and tags")
     metadata = generate_metadata(caption_seed)
-    text_path, json_path, post_text = write_package(
-        Path(video), metadata,
-        {
-            "source_url": url,
-            "source_duration_seconds": duration,
-            "reaction_used": reaction_used,
-            "target_reel_seconds": TARGET_SECONDS,
-            "source_looped": False,
-            "rights_gate": "approved_queue",
-            "source_context_used": bool(source_context),
-        },
-    )
+    text_path, json_path, post_text = write_package(Path(video), metadata, {
+        "source_url": url,
+        "source_duration_seconds": duration,
+        "reaction_used": reaction_used,
+        "target_reel_seconds": TARGET_SECONDS,
+        "source_looped": False,
+        "rights_gate": "approved_queue",
+        "source_context_used": bool(source_context),
+    })
     post_text = add_source_disclosure(post_text, text_path, json_path, url)
-    emit_progress(
-        progress_callback,
-        "metadata_done",
-        status="done",
-        detail="Title, caption and tags ready",
-        title=metadata.get("title"),
-        hashtags=metadata.get("hashtags"),
-    )
-
+    emit_progress(progress_callback, "metadata_done", status="done", detail="Title, caption and tags ready", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
     print("\nREADY")
     print(f"Video: {video}")
     print(f"Caption: {text_path}")
     print(f"Metadata: {json_path}")
-
     results = {"video": str(video), "facebook": None, "instagram": None}
-
     if publish_fb:
         print("\nPublishing to Facebook Page...")
         results["facebook"] = publish_facebook(video, post_text)
         print(f"Facebook success. Video ID: {results['facebook'].get('video_id')}")
-
     if publish_ig:
         emit_progress(progress_callback, "uploading", detail="Uploading Reel to Instagram")
         print("\nPublishing to Instagram...")
@@ -345,15 +335,7 @@ def process_url(url, publish_fb=False, publish_ig=False, progress_callback=None)
         permalink = results["instagram"].get("permalink")
         if permalink:
             print(f"Instagram permalink: {permalink}")
-        emit_progress(
-            progress_callback,
-            "posted",
-            status="done",
-            detail="Posted to Instagram",
-            instagram_media_id=results["instagram"].get("media_id"),
-            instagram_permalink=permalink,
-        )
-
+        emit_progress(progress_callback, "posted", status="done", detail="Posted to Instagram", instagram_media_id=results["instagram"].get("media_id"), instagram_permalink=permalink)
     return results
 
 
