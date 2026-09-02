@@ -27,6 +27,12 @@ for d in (REACTIONS_DIR, SOURCES_DIR, OUTPUT_DIR, DATA_DIR):
 
 
 def ffmpeg_exe():
+    configured = os.getenv("REACTION_FACTORY_FFMPEG", "").strip()
+    if configured and Path(configured).exists():
+        return configured
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
