@@ -1,8 +1,11 @@
 import os
 import time
+import uuid
 from pathlib import Path
 
 import requests
+
+from cloud_sync import cloud_url, headers as cloud_headers, upload_file
 
 
 def _json(response, step="request"):
@@ -85,9 +88,11 @@ def _config():
     if not page_token and system_token:
         page_token = _resolve_page_token(page_id, system_token, version)
 
+    # Prefer the stable automation credentials. Keep the old user token only as a
+    # last-resort fallback so a logged-out Facebook session cannot break posting.
     tokens = []
     seen = set()
-    for label, token in (("user", user_token), ("page", page_token), ("system", system_token)):
+    for label, token in (("page", page_token), ("system", system_token), ("user", user_token)):
         if token and token not in seen:
             tokens.append((label, token))
             seen.add(token)
@@ -135,6 +140,40 @@ def _wait_for_container(container_id, token, version, timeout_seconds):
     raise TimeoutError(f"Instagram processing timed out. Last status: {last_status}")
 
 
+def _signed_cloud_video_url(video_path):
+    remote_path = f"uploads/instagram_{int(time.time())}_{uuid.uuid4().hex[:8]}.mp4"
+    upload_file(Path(video_path), remote_path)
+    endpoint = cloud_url("signed-download", path=remote_path)
+    response = requests.get(endpoint, headers=cloud_headers(), timeout=60)
+    if response.status_code == 401:
+        response = requests.get(endpoint, headers=cloud_headers(force_refresh=True), timeout=60)
+    if not response.ok:
+        raise RuntimeError(f"Could not create Instagram source URL: HTTP {response.status_code} {response.text[:300]}")
+    data = response.json() or {}
+    video_url = str(data.get("url") or "").strip()
+    if not video_url:
+        raise RuntimeError("Cloud gateway did not return a signed Instagram source URL.")
+    return video_url
+
+
+def _create_from_url(video_url, caption, ig_user_id, token, version, token_label):
+    create = requests.post(
+        f"https://graph.facebook.com/{version}/{ig_user_id}/media",
+        data={
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+            "access_token": token,
+        },
+        timeout=60,
+    )
+    data = _json(create, f"container create ({token_label} token)")
+    container_id = str(data.get("id") or "").strip()
+    if not container_id:
+        raise RuntimeError("Instagram did not return a media container ID.")
+    return container_id
+
+
 def _create_and_upload(video_path, caption, ig_user_id, token, version, token_label):
     create_url = f"https://graph.facebook.com/{version}/{ig_user_id}/media"
     create = requests.post(
@@ -177,23 +216,37 @@ def publish_reel(video_path, caption, timeout_seconds=300):
     if not video_path.is_file():
         raise RuntimeError(f"Not a video file: {video_path}")
 
+    # Meta can fetch a public/signed video URL directly. This avoids the binary
+    # resumable-upload HTTP 400 that the GitHub runner was hitting.
+    signed_video_url = None
+    try:
+        signed_video_url = _signed_cloud_video_url(video_path)
+        print("Instagram source staged to a temporary signed cloud URL.")
+    except Exception as exc:
+        print(f"Instagram cloud staging warning: {exc}")
+
     container_id = None
     active_token = None
     errors = []
     for token_label, token in candidates:
         try:
-            container_id = _create_and_upload(
-                video_path, caption, ig_user_id, token, version, token_label
-            )
+            if signed_video_url:
+                container_id = _create_from_url(
+                    signed_video_url, caption, ig_user_id, token, version, token_label
+                )
+            else:
+                container_id = _create_and_upload(
+                    video_path, caption, ig_user_id, token, version, token_label
+                )
             active_token = token
-            print(f"Instagram resumable upload accepted using {token_label} token.")
+            print(f"Instagram upload accepted using {token_label} token.")
             break
         except Exception as exc:
             errors.append(f"{token_label}: {exc}")
-            print(f"Instagram resumable attempt with {token_label} token failed: {exc}")
+            print(f"Instagram attempt with {token_label} token failed: {exc}")
 
     if not container_id or not active_token:
-        raise RuntimeError("Instagram resumable upload failed. " + " | ".join(errors))
+        raise RuntimeError("Instagram upload failed. " + " | ".join(errors))
 
     _wait_for_container(container_id, active_token, version, timeout_seconds)
 
