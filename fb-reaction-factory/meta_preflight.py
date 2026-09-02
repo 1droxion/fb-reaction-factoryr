@@ -104,7 +104,7 @@ def use_saved_page_token():
     page, page_error = graph_get_path(
         PAGE_ID,
         PAGE_TOKEN,
-        fields="id,name,instagram_business_account{id,username}",
+        fields="id,name,access_token,tasks,instagram_business_account{id,username}",
     )
     if not page or str(page.get("id") or "") != PAGE_ID:
         raise SystemExit(
@@ -112,9 +112,21 @@ def use_saved_page_token():
             + str(page_error or "wrong Page returned")
         )
 
-    ig_id, ig_username = validate_instagram_access(PAGE_TOKEN, page)
+    # The saved secret may intentionally be a never-expiring Business System User token.
+    # Meta's Instagram API with Facebook Login publishes with a Page access token, so
+    # derive the Page token at runtime when Meta returns one for the configured Page.
+    runtime_page_token = str(page.get("access_token") or "").strip() or PAGE_TOKEN
+
+    tasks = {str(task) for task in (page.get("tasks") or [])}
+    if tasks and not (tasks & CONTENT_TASKS):
+        raise SystemExit(
+            "The configured Meta token does not have a content-publishing Page task. "
+            f"Current Page tasks: {', '.join(sorted(tasks))}"
+        )
+
+    ig_id, ig_username = validate_instagram_access(runtime_page_token, page)
     values = {
-        "META_PAGE_ACCESS_TOKEN": PAGE_TOKEN,
+        "META_PAGE_ACCESS_TOKEN": runtime_page_token,
         "META_IG_USER_ID": ig_id,
     }
     if ig_username:
@@ -123,8 +135,8 @@ def use_saved_page_token():
 
     print("Meta preflight: saved automation token is valid.")
     print("Meta preflight: configured Facebook Page access is valid.")
+    print("Meta preflight: runtime Page access token is ready.")
     print("Meta preflight: Instagram content publishing access is valid.")
-    print("Meta preflight: using META_PAGE_ACCESS_TOKEN as the stable automation token; user-token refresh is not required.")
 
 
 def granted_user_permissions():
