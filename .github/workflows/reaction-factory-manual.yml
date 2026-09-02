@@ -5,6 +5,8 @@ on:
     paths:
       - 'fb-reaction-factory/data/post_now.trigger'
       - 'fb-reaction-factory/cloud_daemon.py'
+      - 'fb-reaction-factory/channel_dispatch.py'
+      - 'fb-reaction-factory/channel_queue.py'
       - 'fb-reaction-factory/cloud_job.py'
       - 'fb-reaction-factory/cloud_multiplatform.py'
       - 'fb-reaction-factory/cloud_youtube_auth.py'
@@ -32,15 +34,23 @@ jobs:
         working-directory: fb-reaction-factory
     env:
       META_PAGE_ID: '1213992321791402'
+      META_PAGE_ID_TVMIND: '1213992321791402'
+      META_PAGE_ID_KIDS: ${{ secrets.META_PAGE_ID_KIDS }}
       META_IG_USER_ID: '17841406232043396'
       META_IG_USERNAME: 'dhruv6x8'
       META_GRAPH_VERSION: v26.0
       META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+      META_PAGE_ACCESS_TOKEN_TVMIND: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+      META_PAGE_ACCESS_TOKEN_KIDS: ${{ secrets.META_PAGE_ACCESS_TOKEN_KIDS }}
       META_USER_ACCESS_TOKEN: ${{ secrets.META_USER_ACCESS_TOKEN }}
+      META_SYSTEM_USER_ACCESS_TOKEN_KIDS: ${{ secrets.META_SYSTEM_USER_ACCESS_TOKEN_KIDS }}
+      YOUTUBE_TOKEN_JSON_TVMIND: ${{ secrets.YOUTUBE_TOKEN_JSON_TVMIND }}
+      YOUTUBE_TOKEN_JSON_KIDS: ${{ secrets.YOUTUBE_TOKEN_JSON_KIDS }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       REACTION_FACTORY_FORCE_NOW: '1'
       REACTION_FACTORY_POLL_SECONDS: '10'
       REACTION_FACTORY_MAX_RUNTIME_SECONDS: '19800'
+      REACTION_FACTORY_TIMEZONE: 'America/Chicago'
 
     steps:
       - name: Checkout repository
