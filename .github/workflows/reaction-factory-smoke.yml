@@ -90,3 +90,5 @@ jobs:
           print('SMOKE: title + tags passed')
           print('SMOKE SUCCESS: download -> edit -> title/tags all passed; posting was intentionally skipped.')
           PY
+
+# Updated to trigger the smoke workflow after initial creation.
