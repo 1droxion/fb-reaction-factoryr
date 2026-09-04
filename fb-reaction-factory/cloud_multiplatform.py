@@ -15,11 +15,13 @@ from gaming_dashboard_saved import compose_gaming, gaming_metadata
 from instagram import publish_reel as publish_instagram
 from metadata import generate_metadata
 from prepare_reel import write_package
-from reaction_factory import REACTIONS_FILE, ffprobe_duration, load_json, make_reel, make_tvmind_reel
+from reaction_factory import ffprobe_duration, make_reel, make_tvmind_reel
 from youtube_short import publish_short
 
 MIN_SOURCE_SECONDS = 4.0
 MAX_SOURCE_SECONDS = 60.0
+ROOT = Path(__file__).resolve().parent
+GAMING_REACTION = ROOT / "assets" / "gaming_reaction_user.mp4"
 
 
 def normalize_options(raw):
@@ -44,34 +46,10 @@ def is_personal_reaction_job(options):
     )
 
 
-def gaming_reaction_from_library():
-    items = load_json(REACTIONS_FILE, [])
-    if not isinstance(items, list) or not items:
-        raise RuntimeError("No reaction clips are available. Add/restore the Personal reaction library first.")
-
-    preferred = []
-    fallback = []
-    root = REACTIONS_FILE.parent.parent
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        raw = str(item.get("path") or "").strip()
-        if not raw:
-            continue
-        path = Path(raw)
-        if not path.is_absolute():
-            path = root / path
-        if not path.exists() or not path.is_file() or path.stat().st_size < 1000:
-            continue
-        if str(item.get("label") or "").strip().lower() == "gaming":
-            preferred.append(path)
-        else:
-            fallback.append(path)
-
-    choices = preferred or fallback
-    if not choices:
-        raise RuntimeError("Reaction library is configured but no usable reaction MP4 was restored.")
-    return choices[0]
+def gaming_reaction_clip():
+    if not GAMING_REACTION.exists() or not GAMING_REACTION.is_file() or GAMING_REACTION.stat().st_size < 1000:
+        raise RuntimeError("Dedicated D6x8 gaming reaction clip is missing.")
+    return GAMING_REACTION
 
 
 def next_cloud_url(state):
@@ -170,8 +148,8 @@ def process_cloud_job(url, options, progress_sync=None):
     if gaming_job:
         if duration < MIN_SOURCE_SECONDS:
             raise RuntimeError(f"Source is {duration:.1f}s. Gaming mode needs at least {MIN_SOURCE_SECONDS:.0f}s.")
-        _progress(url, "editing_gaming", "Creating Gaming 35/65 using the same cloud reaction library as Personal...", progress_sync)
-        reaction = gaming_reaction_from_library()
+        _progress(url, "editing_gaming", "Creating Gaming 35/65 with the dedicated D6x8 gaming reaction clip...", progress_sync)
+        reaction = gaming_reaction_clip()
         gaming_video, gaming_duration = compose_gaming(source, reaction)
         gaming_video = Path(gaming_video)
         _progress(url, "edited_gaming", "Gaming 35/65 edit ready.", progress_sync, status="done", duration_seconds=round(gaming_duration, 1))
