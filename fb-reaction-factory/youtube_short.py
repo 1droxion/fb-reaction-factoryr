@@ -16,7 +16,7 @@ YOUTUBE_SCOPES = [
 
 def _profile_name(profile):
     clean = str(profile or "personal").strip().lower()
-    return clean if clean in {"personal", "tvmind", "kids"} else "personal"
+    return clean if clean in {"personal", "tvmind", "kids", "gaming"} else "personal"
 
 
 def _token_info(profile="personal"):
@@ -103,7 +103,7 @@ def publish_short(video_path, title, description, tags=None, privacy="public", p
             "title": clean_title,
             "description": clean_description[:5000],
             "tags": clean_tags[:30],
-            "categoryId": os.getenv(f"YOUTUBE_CATEGORY_ID_{profile.upper()}", os.getenv("YOUTUBE_CATEGORY_ID", "24")),
+            "categoryId": os.getenv(f"YOUTUBE_CATEGORY_ID_{profile.upper()}", os.getenv("YOUTUBE_CATEGORY_ID", "20" if profile == "gaming" else "24")),
         },
         "status": {
             "privacyStatus": privacy,
