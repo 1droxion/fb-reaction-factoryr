@@ -26,11 +26,14 @@ GAMING_REACTION = ROOT / "assets" / "gaming_reaction_user.mp4"
 
 def normalize_options(raw):
     raw = raw if isinstance(raw, dict) else {}
+    lane = str(raw.get("lane") or "").strip().lower()
     privacy = str(raw.get("youtube_privacy") or "public").strip().lower()
-    if privacy not in {"public", "unlisted", "private"}:
+    if lane == "gaming":
+        privacy = "public"
+    elif privacy not in {"public", "unlisted", "private"}:
         privacy = "public"
     return {
-        "lane": str(raw.get("lane") or "").strip().lower(),
+        "lane": lane,
         "instagram": bool(raw.get("instagram", True)),
         "youtube": bool(raw.get("youtube", False)),
         "facebook": bool(raw.get("facebook", False)),
@@ -148,7 +151,7 @@ def process_cloud_job(url, options, progress_sync=None):
     if gaming_job:
         if duration < MIN_SOURCE_SECONDS:
             raise RuntimeError(f"Source is {duration:.1f}s. Gaming mode needs at least {MIN_SOURCE_SECONDS:.0f}s.")
-        _progress(url, "editing_gaming", "Creating Gaming 35/65 with the dedicated D6x8 gaming reaction clip...", progress_sync)
+        _progress(url, "editing_gaming", "Creating clear Gaming 35/65 with dedicated D6x8 reaction voice...", progress_sync)
         reaction = gaming_reaction_clip()
         gaming_video, gaming_duration = compose_gaming(source, reaction)
         gaming_video = Path(gaming_video)
@@ -218,7 +221,7 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["youtube"] = prior
         else:
-            yt_detail = "Publishing Gaming 35/65 to D6x8 Gamer YouTube..." if gaming_job else "Publishing the same reaction short to YouTube Shorts..."
+            yt_detail = "Publishing Gaming 35/65 publicly to D6x8 Gamer YouTube..." if gaming_job else "Publishing the same reaction short to YouTube Shorts..."
             _progress(url, "publishing_youtube", yt_detail, progress_sync)
             try:
                 hashtags = metadata.get("hashtags", []) if metadata else []
@@ -229,7 +232,7 @@ def process_cloud_job(url, options, progress_sync=None):
                     title=(metadata or {}).get("title") or ("Gaming Moment 🎮" if gaming_job else "Reaction Short 😂"),
                     description=((metadata or {}).get("description") or "") + "\n\n" + " ".join(hashtags),
                     tags=tags,
-                    privacy=options["youtube_privacy"],
+                    privacy="public" if gaming_job else options["youtube_privacy"],
                     profile="gaming" if gaming_job else "personal",
                 )
                 results["youtube"] = result
@@ -300,7 +303,7 @@ def run_cloud_cycle(progress_sync=None):
         state["last_url"] = url
         state["last_error"] = detail
         state.setdefault("failed", {})[url] = {"error": detail, "at": now_iso(), "skip": True}
-        state["current_progress"] = {"url": url, "stage": "failed", "status": "error", "detail": detail, "updated_at": now_iso(), "destinations": options}
+        state["current_progress"] = {"url": url, "stage": "failed", "status": "error", "detail": detail, "updated_at": now_iso(), "destinations": options, "youtube_url": (results.get("youtube") or {}).get("url")}
         _history(state, "failed", url, options, results=results, error=detail)
         save_state(state)
         _sync(progress_sync)
