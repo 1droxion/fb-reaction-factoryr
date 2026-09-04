@@ -11,6 +11,7 @@ from auto_pipeline import (
 )
 from autopilot import load_state, now_iso, save_state
 from facebook import publish_reel as publish_facebook
+from gaming_dashboard_saved import compose_gaming, ensure_saved_reaction, gaming_metadata
 from instagram import publish_reel as publish_instagram
 from metadata import generate_metadata
 from prepare_reel import write_package
@@ -118,9 +119,11 @@ def process_cloud_job(url, options, progress_sync=None):
         raise RuntimeError("Choose at least one destination.")
 
     require_explicit_approval(url)
+    lane = options.get("lane")
+    gaming_job = lane == "gaming"
     personal_reaction = is_personal_reaction_job(options)
-    reaction_needed = bool(options["instagram"] or options["youtube"])
-    tvmind_edit_needed = bool(options["facebook"] and options.get("lane") in {"tvmind", "tvmind_direct"})
+    reaction_needed = not gaming_job and bool(options["instagram"] or options["youtube"])
+    tvmind_edit_needed = bool(options["facebook"] and lane in {"tvmind", "tvmind_direct"})
 
     _progress(url, "downloading", "Downloading source now...", progress_sync)
     source_context = source_context_from_url(url)
@@ -130,10 +133,23 @@ def process_cloud_job(url, options, progress_sync=None):
 
     reaction_video = None
     tvmind_video = None
+    gaming_video = None
     metadata = None
     post_text = ""
 
-    if reaction_needed:
+    if gaming_job:
+        if duration < MIN_SOURCE_SECONDS:
+            raise RuntimeError(f"Source is {duration:.1f}s. Gaming mode needs at least {MIN_SOURCE_SECONDS:.0f}s.")
+        _progress(url, "editing_gaming", "Creating Gaming 35/65: saved reaction on top + gameplay on bottom...", progress_sync)
+        reaction = ensure_saved_reaction()
+        gaming_video, gaming_duration = compose_gaming(source, reaction)
+        gaming_video = Path(gaming_video)
+        _progress(url, "edited_gaming", "Gaming 35/65 edit ready.", progress_sync, status="done", duration_seconds=round(gaming_duration, 1))
+        _progress(url, "metadata", "Creating gaming title + exactly 5 tags...", progress_sync)
+        metadata = gaming_metadata(url)
+        post_text = metadata["description"] + "\n\n" + " ".join(metadata["hashtags"])
+        _progress(url, "metadata_done", "Gaming title and 5 tags ready.", progress_sync, status="done", title=metadata.get("title"), hashtags=metadata.get("hashtags"))
+    elif reaction_needed:
         if duration < MIN_SOURCE_SECONDS:
             raise RuntimeError(f"Source is {duration:.1f}s. Instant reaction mode needs at least {MIN_SOURCE_SECONDS:.0f}s.")
         caption_seed = source_context or clean_caption_seed(source)
@@ -194,16 +210,19 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["youtube"] = prior
         else:
-            _progress(url, "publishing_youtube", "Publishing the same reaction short to YouTube Shorts...", progress_sync)
+            yt_detail = "Publishing Gaming 35/65 to D6x8 Gamer YouTube..." if gaming_job else "Publishing the same reaction short to YouTube Shorts..."
+            _progress(url, "publishing_youtube", yt_detail, progress_sync)
             try:
                 hashtags = metadata.get("hashtags", []) if metadata else []
+                tags = metadata.get("tags", hashtags) if metadata else hashtags
+                youtube_video = gaming_video if gaming_job else reaction_video
                 result = publish_short(
-                    reaction_video,
-                    title=(metadata or {}).get("title") or "Reaction Short 😂",
+                    youtube_video,
+                    title=(metadata or {}).get("title") or ("Gaming Moment 🎮" if gaming_job else "Reaction Short 😂"),
                     description=((metadata or {}).get("description") or "") + "\n\n" + " ".join(hashtags),
-                    tags=hashtags,
+                    tags=tags,
                     privacy=options["youtube_privacy"],
-                    profile="personal",
+                    profile="gaming" if gaming_job else "personal",
                 )
                 results["youtube"] = result
                 _destination_success(url, "youtube", result, progress_sync)
@@ -216,10 +235,18 @@ def process_cloud_job(url, options, progress_sync=None):
         if done:
             results["facebook"] = prior
         else:
-            _progress(url, "publishing_facebook", "Publishing TV Mind USA video to Facebook...", progress_sync)
+            fb_detail = "Publishing Gaming 35/65 to D6x8 Gamer Facebook..." if gaming_job else "Publishing TV Mind USA video to Facebook..."
+            _progress(url, "publishing_facebook", fb_detail, progress_sync)
             try:
-                facebook_video = tvmind_video or source
-                result = publish_facebook(facebook_video, "", profile="tvmind" if options.get("lane") in {"tvmind", "tvmind_direct"} else None)
+                if gaming_job:
+                    facebook_video = gaming_video or source
+                    facebook_text = post_text
+                    facebook_profile = "gaming"
+                else:
+                    facebook_video = tvmind_video or source
+                    facebook_text = ""
+                    facebook_profile = "tvmind" if lane in {"tvmind", "tvmind_direct"} else None
+                result = publish_facebook(facebook_video, facebook_text, profile=facebook_profile)
                 results["facebook"] = result
                 _destination_success(url, "facebook", result, progress_sync)
             except Exception as exc:
@@ -275,9 +302,9 @@ def run_cloud_cycle(progress_sync=None):
     if options["instagram"]:
         completed.append("Instagram")
     if options["youtube"]:
-        completed.append("YouTube Shorts")
+        completed.append("D6x8 Gamer YouTube" if options.get("lane") == "gaming" else "YouTube Shorts")
     if options["facebook"]:
-        completed.append("TV Mind USA")
+        completed.append("D6x8 Gamer Facebook" if options.get("lane") == "gaming" else "TV Mind USA")
 
     state = load_state()
     state.setdefault("processed", {})[url] = "success"
