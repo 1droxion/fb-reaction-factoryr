@@ -8,11 +8,12 @@ DEFAULT_TVMIND_DESCRIPTION = (
     "#Explore #FacebookReel #ReelsViral #TVMindUSA"
 )
 DEFAULT_KIDS_DESCRIPTION = "Fun family-friendly short videos\n\n#Kids #Family #Shorts #Reels"
+DEFAULT_GAMING_DESCRIPTION = "Gaming clip 🎮 Follow for more gameplay.\n\n#Gaming #Gameplay #GamingClips #Gamer #Shorts"
 
 
 def _profile_name(profile):
     clean = str(profile or "tvmind").strip().lower()
-    return clean if clean in {"tvmind", "kids"} else "tvmind"
+    return clean if clean in {"tvmind", "kids", "gaming"} else "tvmind"
 
 
 def _config(profile="tvmind"):
@@ -87,7 +88,12 @@ def publish_reel(video_path, description="", state="PUBLISHED", profile="tvmind"
     profile = _profile_name(profile)
     page_id, supplied_token, version = _config(profile)
     token = _resolve_page_token(page_id, supplied_token, version)
-    fallback = DEFAULT_KIDS_DESCRIPTION if profile == "kids" else DEFAULT_TVMIND_DESCRIPTION
+    if profile == "kids":
+        fallback = DEFAULT_KIDS_DESCRIPTION
+    elif profile == "gaming":
+        fallback = DEFAULT_GAMING_DESCRIPTION
+    else:
+        fallback = DEFAULT_TVMIND_DESCRIPTION
     description = (description or "").strip() or fallback
     video_path = Path(video_path)
     if not video_path.exists():
