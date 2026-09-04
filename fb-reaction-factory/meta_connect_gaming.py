@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent
 ENV_FILE = ROOT / ".env"
 GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v26.0")
 EXPECTED_PAGE_NAME = "D6x8 Gamer"
+EXPECTED_PAGE_ID = "1205078879346627"
 
 MANAGED_KEYS = {
     "META_PAGE_ID_GAMING",
@@ -68,33 +69,30 @@ def write_env(values):
 
 def main():
     print("D6x8 Gamer Facebook permanent connection")
+    print(f"Expected Page: {EXPECTED_PAGE_NAME} ({EXPECTED_PAGE_ID})")
     print("Use a Meta Business System User token generated with expiration: Never.")
     print("Assign the D6x8 Gamer Page to that System User before continuing.")
     print("The token is hidden while you paste it and is never printed.")
-
-    page_id = input("Paste D6x8 Gamer Facebook Page ID (numbers only): ").strip()
-    if not page_id.isdigit():
-        raise SystemExit("Invalid Page ID. Use the numeric Facebook Page ID from Business Settings.")
 
     system_token = getpass.getpass("Paste System User token (Never expires): ").strip()
     if not system_token:
         raise SystemExit("No System User token entered.")
 
-    check = graph_get(page_id, system_token, fields="id,name")
+    check = graph_get(EXPECTED_PAGE_ID, system_token, fields="id,name")
     returned_name = str(check.get("name") or "").strip()
     returned_id = str(check.get("id") or "").strip()
-    if returned_id != page_id:
+    if returned_id != EXPECTED_PAGE_ID:
         raise SystemExit("Meta returned an unexpected Page ID.")
     if returned_name.lower() != EXPECTED_PAGE_NAME.lower():
         raise SystemExit(f"Wrong Page. Expected '{EXPECTED_PAGE_NAME}', Meta returned '{returned_name or '?'}'.")
 
     write_env({
-        "META_PAGE_ID_GAMING": page_id,
+        "META_PAGE_ID_GAMING": EXPECTED_PAGE_ID,
         "META_SYSTEM_USER_ACCESS_TOKEN_GAMING": system_token,
     })
 
     print("\nGAMING FACEBOOK PERMANENT CONNECTION SUCCESS")
-    print(f"Page: {returned_name} ({page_id})")
+    print(f"Page: {returned_name} ({EXPECTED_PAGE_ID})")
     print("Saved as META_SYSTEM_USER_ACCESS_TOKEN_GAMING.")
     print("TV Mind and all existing Facebook credentials were left unchanged.")
 
