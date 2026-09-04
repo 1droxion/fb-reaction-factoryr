@@ -23,6 +23,7 @@ on:
       - 'fb-reaction-factory/gaming_dashboard.py'
       - 'fb-reaction-factory/gaming_dashboard_saved.py'
       - 'fb-reaction-factory/assets/gaming_reaction_user.mp4'
+      - 'fb-reaction-factory/assets/gaming_reaction_user.part*.b64'
       - '.github/workflows/reaction-factory-manual.yml'
   schedule:
     - cron: '0 */5 * * *'
@@ -93,6 +94,26 @@ jobs:
           "$FFMPEG_BIN" -filters | grep -q drawtext
           echo "REACTION_FACTORY_FFMPEG=$FFMPEG_BIN" >> "$GITHUB_ENV"
           echo "FFmpeg banner/text support is ready at $FFMPEG_BIN."
+
+      - name: Restore full moving D6x8 gaming reaction
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+
+          parts = sorted(Path('assets').glob('gaming_reaction_user.part*.b64'))
+          if len(parts) != 7:
+              raise SystemExit(f'Expected 7 gaming reaction chunks, found {len(parts)}')
+          encoded = ''.join(p.read_text(encoding='utf-8').strip() for p in parts)
+          data = base64.b64decode(encoded, validate=True)
+          target = Path('assets/gaming_reaction_user.mp4')
+          target.write_bytes(data)
+          if target.stat().st_size != 14719:
+              raise SystemExit(f'Gaming reaction restore size mismatch: {target.stat().st_size}')
+          print('D6x8 moving gaming reaction restored:', target.stat().st_size, 'bytes')
+          PY
+          "$REACTION_FACTORY_FFMPEG" -v error -i assets/gaming_reaction_user.mp4 -f null -
 
       - name: Get private cloud worker identity
         shell: bash
