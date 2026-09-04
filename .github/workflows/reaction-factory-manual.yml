@@ -21,6 +21,8 @@ on:
       - 'fb-reaction-factory/instagram_download.py'
       - 'fb-reaction-factory/reaction_factory.py'
       - 'fb-reaction-factory/gaming_dashboard.py'
+      - 'fb-reaction-factory/gaming_dashboard_saved.py'
+      - 'fb-reaction-factory/assets/gaming_reaction_user.mp4'
       - '.github/workflows/reaction-factory-manual.yml'
   schedule:
     - cron: '0 */5 * * *'
@@ -103,6 +105,20 @@ jobs:
       - name: Check Meta credentials
         continue-on-error: true
         run: python meta_preflight.py
+
+      - name: Verify D6x8 Gamer YouTube
+        shell: bash
+        run: |
+          python - <<'PY'
+          from googleapiclient.discovery import build
+          from youtube_short import _credentials, _connected_channel
+
+          youtube = build('youtube', 'v3', credentials=_credentials('gaming'), cache_discovery=False)
+          channel = _connected_channel(youtube)
+          if channel != 'D6x8 Gamer':
+              raise SystemExit(f'Gaming YouTube OAuth points to wrong channel: {channel!r}')
+          print('Gaming YouTube connected: D6x8 Gamer')
+          PY
 
       - name: Run continuous dashboard worker
         run: python cloud_daemon.py
