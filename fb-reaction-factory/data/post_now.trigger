@@ -1,2 +1,2 @@
-trigger_id=meta-token-refresh-20260902-1348
-reason=restart_worker_after_meta_system_user_token_refresh
+trigger_id=reaction-worker-restart-20260912-1749
+reason=restart_worker_after_supabase_recovery_and_pick_queued_job
