@@ -17,13 +17,6 @@ REQUIRED_USER_PERMISSIONS = {
     "instagram_basic",
     "instagram_content_publish",
 }
-CONTENT_TASKS = {
-    "CREATE_CONTENT",
-    "MANAGE",
-    "PROFILE_PLUS_CREATE_CONTENT",
-    "PROFILE_PLUS_MANAGE",
-    "PROFILE_PLUS_FULL_CONTROL",
-}
 
 
 def graph_get_path(path, token, **params):
@@ -81,6 +74,9 @@ def validate_instagram_access(token, page):
             "Connect the Instagram Business/Creator account to the Page first."
         )
 
+    # This is the authoritative capability check for the path Reaction Factory uses.
+    # Avoid the Page `tasks` field here: Graph API v26 can reject that field on the
+    # direct Page lookup even when the saved automation token itself is usable.
     limit_data, limit_error = graph_get_path(
         f"{ig_id}/content_publishing_limit",
         token,
@@ -104,7 +100,7 @@ def use_saved_page_token():
     page, page_error = graph_get_path(
         PAGE_ID,
         PAGE_TOKEN,
-        fields="id,name,access_token,tasks,instagram_business_account{id,username}",
+        fields="id,name,access_token,instagram_business_account{id,username}",
     )
     if not page or str(page.get("id") or "") != PAGE_ID:
         raise SystemExit(
@@ -116,13 +112,6 @@ def use_saved_page_token():
     # Meta's Instagram API with Facebook Login publishes with a Page access token, so
     # derive the Page token at runtime when Meta returns one for the configured Page.
     runtime_page_token = str(page.get("access_token") or "").strip() or PAGE_TOKEN
-
-    tasks = {str(task) for task in (page.get("tasks") or [])}
-    if tasks and not (tasks & CONTENT_TASKS):
-        raise SystemExit(
-            "The configured Meta token does not have a content-publishing Page task. "
-            f"Current Page tasks: {', '.join(sorted(tasks))}"
-        )
 
     ig_id, ig_username = validate_instagram_access(runtime_page_token, page)
     values = {
@@ -155,7 +144,7 @@ def find_managed_page():
     data, error = graph_get_path(
         "me/accounts",
         USER_TOKEN,
-        fields="id,name,access_token,tasks,instagram_business_account{id,username}",
+        fields="id,name,access_token,instagram_business_account{id,username}",
         limit="100",
     )
     if not data:
@@ -190,13 +179,6 @@ def use_user_token_fallback():
         raise SystemExit(
             "The Meta user token cannot manage the configured Facebook Page: "
             f"{page_error}."
-        )
-
-    tasks = {str(task) for task in (page.get("tasks") or [])}
-    if tasks and not (tasks & CONTENT_TASKS):
-        raise SystemExit(
-            "The Facebook account does not have a content-publishing Page task. "
-            f"Current Page tasks: {', '.join(sorted(tasks))}"
         )
 
     refreshed_page_token = str(page.get("access_token") or "").strip()
