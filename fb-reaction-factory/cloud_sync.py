@@ -29,6 +29,7 @@ STATE_FILES = (
 MAX_CLOUD_BYTES = 6 * 1024 * 1024
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 TOKEN_REFRESH_SECONDS = 120
+MAX_RETRIES = 4
 
 DATA.mkdir(parents=True, exist_ok=True)
 REACTIONS.mkdir(parents=True, exist_ok=True)
@@ -135,6 +136,12 @@ def cloud_url(op, **params):
     return f"{CLOUD_URL}?op={quote(op)}" + (f"&{query}" if query else "")
 
 
+def _retry_sleep(attempt, label):
+    delay = min(12, 2 ** (attempt - 1))
+    print(f"{label} retry {attempt}/{MAX_RETRIES - 1} in {delay}s...")
+    time.sleep(delay)
+
+
 def safe_name(name):
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).name).strip("._")
     if not cleaned:
@@ -184,7 +191,7 @@ def compact_reaction(path: Path, remote_name: str) -> Path:
 def upload_file(local_path: Path, remote_path: str):
     content_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
     last_detail = "unknown error"
-    for attempt in range(1, 4):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             with local_path.open("rb") as f:
                 r = requests.post(
@@ -209,29 +216,48 @@ def upload_file(local_path: Path, remote_path: str):
                 break
         except requests.RequestException as exc:
             last_detail = str(exc)
-        if attempt < 3:
-            print(f"Upload retry {attempt}/2 for {remote_path}...")
-            time.sleep(attempt * 3)
+        if attempt < MAX_RETRIES:
+            _retry_sleep(attempt, f"Upload {remote_path}")
     raise RuntimeError(f"Cloud upload failed for {remote_path}: {last_detail}")
 
 
 def download_file(remote_path: str, local_path: Path, required=False):
-    r = _get(cloud_url("download", path=remote_path), timeout=180)
-    if r.status_code == 404 and not required:
-        return False
-    if not r.ok:
-        raise RuntimeError(f"Cloud download failed for {remote_path}: {r.status_code} {r.text[:300]}")
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    local_path.write_bytes(r.content)
-    print(f"Downloaded: {remote_path}")
-    return True
+    last_detail = "unknown error"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = _get(cloud_url("download", path=remote_path), timeout=180)
+            if r.status_code == 404 and not required:
+                return False
+            if r.ok:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(r.content)
+                print(f"Downloaded: {remote_path}")
+                return True
+            last_detail = f"{r.status_code} {r.text[:300]}"
+            if r.status_code not in RETRYABLE_STATUS:
+                break
+        except requests.RequestException as exc:
+            last_detail = str(exc)
+        if attempt < MAX_RETRIES:
+            _retry_sleep(attempt, f"Download {remote_path}")
+    raise RuntimeError(f"Cloud download failed for {remote_path}: {last_detail}")
 
 
 def list_remote(prefix):
-    r = _get(cloud_url("list", prefix=prefix), timeout=60)
-    if not r.ok:
-        raise RuntimeError(f"Cloud list failed: {r.status_code} {r.text[:300]}")
-    return (r.json() or {}).get("files") or []
+    last_detail = "unknown error"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = _get(cloud_url("list", prefix=prefix), timeout=60)
+            if r.ok:
+                return (r.json() or {}).get("files") or []
+            last_detail = f"{r.status_code} {r.text[:300]}"
+            if r.status_code not in RETRYABLE_STATUS:
+                break
+        except requests.RequestException as exc:
+            last_detail = str(exc)
+        if attempt < MAX_RETRIES:
+            _retry_sleep(attempt, f"Cloud list {prefix}")
+    raise RuntimeError(f"Cloud list failed: {last_detail}")
 
 
 def reaction_items():
@@ -243,6 +269,22 @@ def reaction_items():
         return data if isinstance(data, list) else []
     except Exception:
         return []
+
+
+def reaction_names_from_state():
+    names = []
+    seen = set()
+    for item in reaction_items():
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("path") or "").strip()
+        if not raw:
+            continue
+        name = Path(raw).name
+        if name.lower().endswith(".mp4") and name not in seen:
+            names.append(name)
+            seen.add(name)
+    return names
 
 
 def referenced_reaction_files():
@@ -269,7 +311,12 @@ def push_reactions():
     if not files:
         raise RuntimeError("No reaction MP4 files found in reactions/.")
 
-    remote = set(list_remote("reactions"))
+    try:
+        remote = set(list_remote("reactions"))
+    except Exception as exc:
+        print(f"Reaction cloud listing unavailable; using safe upsert uploads instead: {exc}")
+        remote = set()
+
     uploaded = 0
     skipped = 0
     for path in files:
@@ -286,12 +333,52 @@ def push_reactions():
 
 
 def pull_reactions():
-    names = [x for x in list_remote("reactions") if x.lower().endswith(".mp4")]
+    # Avoid depending on a Storage folder listing at worker startup. Large/busy
+    # buckets can occasionally make the list operation fail even though direct
+    # file downloads still work. reactions.json is the source of truth and
+    # gives us the exact files the worker needs.
+    try:
+        download_file("state/reactions.json", DATA / "reactions.json", required=False)
+    except Exception as exc:
+        print(f"Reaction manifest restore warning: {exc}")
+
+    names = reaction_names_from_state()
     if not names:
+        try:
+            names = [x for x in list_remote("reactions") if x.lower().endswith(".mp4")]
+        except Exception as exc:
+            local_names = sorted(p.name for p in REACTIONS.glob("*.mp4") if p.stat().st_size > 0)
+            if local_names:
+                print(f"Cloud reaction listing unavailable; keeping {len(local_names)} local reaction clip(s): {exc}")
+                return
+            raise
+
+    if not names:
+        local_names = sorted(p.name for p in REACTIONS.glob("*.mp4") if p.stat().st_size > 0)
+        if local_names:
+            print(f"Using {len(local_names)} local reaction clip(s).")
+            return
         raise RuntimeError("No reaction clips are stored in cloud yet. Run: python3 cloud_sync.py bootstrap")
+
+    restored = 0
+    failures = []
     for name in names:
-        download_file(f"reactions/{name}", REACTIONS / name, required=True)
-    print(f"Reaction clips restored: {len(names)}")
+        target = REACTIONS / name
+        try:
+            if download_file(f"reactions/{name}", target, required=True):
+                restored += 1
+        except Exception as exc:
+            if target.exists() and target.stat().st_size > 0:
+                print(f"Keeping existing local reaction after cloud error: {name} ({exc})")
+                restored += 1
+            else:
+                failures.append(f"{name}: {exc}")
+
+    if restored < 1:
+        raise RuntimeError("Reaction restore failed: " + "; ".join(failures[:3]))
+    if failures:
+        print(f"Reaction restore warning: {len(failures)} clip(s) unavailable; continuing with {restored} ready clip(s).")
+    print(f"Reaction clips restored: {restored}")
 
 
 def portable_reactions_json():
@@ -335,10 +422,21 @@ def pull_state():
 
 
 def health():
-    r = _get(cloud_url("health"), timeout=30)
-    if not r.ok:
-        raise RuntimeError(f"Cloud gateway failed: {r.status_code} {r.text[:300]}")
-    print(json.dumps(r.json(), indent=2))
+    last_detail = "unknown error"
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            r = _get(cloud_url("health"), timeout=30)
+            if r.ok:
+                print(json.dumps(r.json(), indent=2))
+                return
+            last_detail = f"{r.status_code} {r.text[:300]}"
+            if r.status_code not in RETRYABLE_STATUS:
+                break
+        except requests.RequestException as exc:
+            last_detail = str(exc)
+        if attempt < MAX_RETRIES:
+            _retry_sleep(attempt, "Cloud health")
+    raise RuntimeError(f"Cloud gateway failed: {last_detail}")
 
 
 def main():
