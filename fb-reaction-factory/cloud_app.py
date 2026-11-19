@@ -7,9 +7,14 @@ from flask import Response, jsonify, request
 
 from dashboard import app, load_env_file
 from gaming_dashboard_saved import gaming_bp
+import instagram_sales_agent as instagram_sales_agent
+from instagram_sales_agent import sales_bp
+from instagram_sales_meta_rules import install as install_instagram_sales_rules
 
 load_env_file()
+install_instagram_sales_rules(instagram_sales_agent)
 app.register_blueprint(gaming_bp)
+app.register_blueprint(sales_bp)
 
 
 def _authorized():
@@ -29,7 +34,10 @@ def _authorized():
 
 @app.before_request
 def cloud_auth():
-    if request.path == "/healthz":
+    # Meta must be able to reach the webhook verification and event endpoints
+    # without the private Reaction Factory dashboard Basic Auth challenge.
+    # POST authenticity is checked separately with X-Hub-Signature-256.
+    if request.path in {"/healthz", "/instagram/webhook"}:
         return None
 
     if not os.getenv("DASHBOARD_PASSWORD", "").strip():
